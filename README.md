@@ -1,4 +1,4 @@
-# Cookie Launcher 🍪 (Tauri v2 · v3.0.0)
+# Cookie Launcher 🍪 (Tauri v2 · v3.1.0)
 
 Açık kaynak, hafif ve modern bir **Minecraft: Java Edition** başlatıcısı — Tauri (Rust) kabuk + Python çekirdek.
 
@@ -68,6 +68,20 @@ cookie-launcher-tauri/
 ---
 
 ---
+
+## 🆕 v3.1 Öne Çıkanlar
+
+- **"Cocoa Workshop" arayüzü:** cam efektleri ve emoji ağırlıklı görünüm yerine
+  koyu çikolata zemin, krem tipografi, amber vurgu ve ince çizgili bir masaüstü dili.
+- **Tam yeniden düzenlenen Oyna ekranı:** aktif profil, son dünyalar, hızlı klasör
+  eylemleri ve sistem durumu tek bakışta.
+- **Profil arama / sıralama:** ada, mod sayısına veya son oynanma zamanına göre filtrele.
+- **Gerçek galeri:** ekran görüntüleri küçük resim olarak yüklenir; tıklayınca büyütülür.
+- **Konsol araçları:** panoya kopyala, `.log` olarak dışa aktar, otomatik kaydırmayı kapat.
+- **Klavye kısayolları:** `Ctrl+1–5` sekmeler, `Ctrl+K` arama, `Enter` başlat, `?` yardım.
+- **Güvenlik ve dayanıklılık:** loopback API için origin/Host doğrulaması, gövde boyutu
+  sınırı, güvenli dosya adı/symlink kontrolleri, atomik profil yazımı ve yarım kalan
+  kurulumların açılışta kurtarılması.
 
 ## 🆕 v3.0 Öne Çıkanlar
 

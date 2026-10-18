@@ -19,6 +19,7 @@ import struct
 import shutil
 import socket
 import mimetypes
+import tempfile
 import threading
 import subprocess
 import traceback
@@ -122,9 +123,58 @@ MODRINTH_CACHE_MAX = 600
 CONTENT_META_CACHE_MAX = 2000
 CACHE_SAVE_MIN_INTERVAL = 30.0  # saniye: ardisik disk yazimlarini birlestir
 
+# Ayni hedef dosyaya es zamanli indirmeleri serielestir.
+_DOWNLOAD_LOCKS = {}
+_DOWNLOAD_LOCKS_GUARD = threading.Lock()
+
+
+def _download_lock_for(dest_path):
+    key = os.path.abspath(dest_path)
+    with _DOWNLOAD_LOCKS_GUARD:
+        lock = _DOWNLOAD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _DOWNLOAD_LOCKS[key] = lock
+        return lock
+
 # NOT: Yeni bir API endpoint'i eklendiginde bu surumu ARTIR ve
 # src-tauri/src/main.rs ile src/app.js icindeki kontrolu de guncelle!
-API_VERSION = 14
+API_VERSION = 15
+
+# Loopback API'yi yalnizca launcher'in kendi origin'lerinden gelen isteklere ac.
+# Bu, rastgele bir web sayfasinin /api/instances/delete gibi uclari cagirmasini
+# ve DNS rebinding ile yerel servisi ele gecirmesini engeller.
+ALLOWED_ORIGINS = {
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "http://127.0.0.1:18420",
+    "http://localhost:18420",
+    "http://127.0.0.1:8123",
+    "http://localhost:8123",
+    "http://localhost:1420",
+}
+MAX_POST_BYTES = 1024 * 1024
+
+
+def _as_bool(value, default=False):
+    """JSON'dan gelen bool/str/int degerleri tutarli sekilde yorumlar."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return default
+
+
+def offline_uuid(username):
+    """Minecraft'in cevrimdisi mod UUID'sini (MD5 tabanli) uretir."""
+    digest = bytearray(hashlib.md5(f"OfflinePlayer:{username}".encode("utf-8")).digest())
+    digest[6] = (digest[6] & 0x0F) | 0x30
+    digest[8] = (digest[8] & 0x3F) | 0x80
+    h = digest.hex()
+    return f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
 
 
 # ==================== PROFIL (INSTANCE) YARDIMCILARI ====================
@@ -184,9 +234,43 @@ def list_instances():
     return insts
 
 
+def reconcile_stale_installs():
+    """Onceki oturumdan 'installing' kalmis profilleri kurtarilabilir hale getir.
+
+    Arka plan kurulum thread'i backend ile birlikte olur; backend yeniden
+    basladiginda hicbir kurulum gercekte devam etmiyordur. Bu yuzden bu
+    durumdaki profiller 'failed' olarak isaretlenir ve yeniden denenebilir.
+    """
+    try:
+        if not os.path.isdir(INSTANCES_DIR):
+            return
+        for d in os.listdir(INSTANCES_DIR):
+            cfg_path = os.path.join(INSTANCES_DIR, d, "instance.json")
+            if not os.path.isfile(cfg_path):
+                continue
+            try:
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+            except Exception:
+                continue
+            if cfg.get("install_status") == "installing":
+                cfg["install_status"] = "failed"
+                cfg["install_detail"] = "Önceki oturumda yarıda kaldı; yeniden deneyin."
+                try:
+                    atomic_write_json(cfg_path, cfg)
+                    add_log(f"⚠️ Yarıda kalmış kurulum kurtarıldı: {cfg.get('name') or d}")
+                except Exception as e:
+                    log_error(f"Stale kurulum işaretlenemedi ({d}): {e}")
+    except Exception as e:
+        log_error(f"Stale kurulum taraması başarısız: {e}")
+
+
 # ==================== KONSOL GUNLUK & DURUM YONETIMI ====================
 MAX_LOG_HISTORY = 1000
+MAX_LOG_BYTES = 256 * 1024
+MAX_LOG_LINE_CHARS = 4096
 console_logs = []
+console_log_bytes = 0
 logs_lock = threading.Lock()
 state_lock = threading.RLock()
 
@@ -203,17 +287,26 @@ launch_state = {
     "error": None,
     "minecraft_pid": None,
     "started_at": None,
+    "launch_instance_id": None,
 }
 
 
 def add_log(msg):
-    """Konsol gecmisine ve stdout'a log yazar (thread-safe)."""
+    """Konsol gecmisine ve stdout'a log yazar (thread-safe, byte sinirli)."""
+    global console_log_bytes
     t_str = time.strftime("[%H:%M:%S]")
-    line = f"{t_str} {msg}"
+    text = str(msg)
+    if len(text) > MAX_LOG_LINE_CHARS:
+        text = text[:MAX_LOG_LINE_CHARS] + "…"
+    line = f"{t_str} {text}"
     with logs_lock:
         console_logs.append(line)
-        if len(console_logs) > MAX_LOG_HISTORY:
-            console_logs.pop(0)
+        console_log_bytes += len(line.encode("utf-8", "replace")) + 1
+        while console_logs and (len(console_logs) > MAX_LOG_HISTORY or console_log_bytes > MAX_LOG_BYTES):
+            removed = console_logs.pop(0)
+            console_log_bytes -= len(removed.encode("utf-8", "replace")) + 1
+        if console_log_bytes < 0:
+            console_log_bytes = 0
     try:
         print(line, flush=True)
     except Exception:
@@ -635,7 +728,7 @@ def clean_minecraft_version(v):
 class ModrinthFetcher:
     BASE_URL = "https://api.modrinth.com/v2"
     HEADERS = {
-        "User-Agent": "Freesm/CookieLauncher/3.0.0 (https://github.com/cookie-launcher; support@cookielauncher.app)"
+        "User-Agent": "Freesm/CookieLauncher/3.1.0 (https://github.com/cookie-launcher; support@cookielauncher.app)"
     }
     # Arama + surum cozumleme onbellegi. OrderedDict + ust sinir ile LRU
     # davranisi uygulanir; aksi hâlde her farkli arama kalici olarak birikir
@@ -856,20 +949,45 @@ class ModrinthFetcher:
         return chosen
 
     @classmethod
-    def download_file(cls, url, dest_path):
+    def download_file(cls, url, dest_path, expected_size=None):
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        part_path = dest_path + ".part"
-        with requests.get(url, headers=cls.HEADERS, stream=True, timeout=30) as r:
-            r.raise_for_status()
-            with open(part_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=32768):
-                    if chunk:
-                        f.write(chunk)
-        if os.path.exists(dest_path):
-            os.remove(dest_path)
-        os.rename(part_path, dest_path)
-        add_downloaded_bytes(os.path.getsize(dest_path))
-        return dest_path
+        lock = _download_lock_for(dest_path)
+        with lock:
+            fd, part_path = tempfile.mkstemp(
+                dir=os.path.dirname(dest_path),
+                prefix=".download-",
+                suffix=".part",
+            )
+            os.close(fd)
+            try:
+                with requests.get(url, headers=cls.HEADERS, stream=True, timeout=30) as r:
+                    r.raise_for_status()
+                    total = 0
+                    with open(part_path, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=32768):
+                            if chunk:
+                                f.write(chunk)
+                                total += len(chunk)
+                    try:
+                        declared = int(r.headers.get("Content-Length") or 0)
+                    except Exception:
+                        declared = 0
+                    if r.headers.get("Content-Encoding"):
+                        declared = 0
+                    if declared and total != declared:
+                        raise IOError(f"Eksik indirme: {total}/{declared} bayt")
+                    if expected_size and total != int(expected_size):
+                        raise IOError(f"Dosya boyutu uyuşmuyor: {total}/{expected_size} bayt")
+                os.replace(part_path, dest_path)
+                add_downloaded_bytes(os.path.getsize(dest_path))
+                return dest_path
+            except Exception:
+                try:
+                    if os.path.exists(part_path):
+                        os.remove(part_path)
+                except OSError:
+                    pass
+                raise
 
 
 # ==================== KOK MODLARI KARANTINAYA ALMA ====================
@@ -909,7 +1027,10 @@ def inject_cookie_optimization_mods(version_str, target_mods_dir, loader="fabric
     if curated_key in CURATED_OPTIMIZATION_MAP:
         add_log(f"⚡ {clean_v} için doğrulanmış optimize mod profili bulundu.")
         for item in CURATED_OPTIMIZATION_MAP[curated_key]:
-            fname = item["filename"]
+            fname = _safe_download_filename(item.get("filename"), (".jar",))
+            if not fname:
+                add_log(f"⚠️ Geçersiz optimize mod dosya adı atlandı: {item.get('filename')!r}")
+                continue
             dest = os.path.join(target_mods_dir, fname)
             if not os.path.exists(dest):
                 try:
@@ -926,11 +1047,14 @@ def inject_cookie_optimization_mods(version_str, target_mods_dir, loader="fabric
         try:
             info = ModrinthFetcher.get_latest_mod_jar(slug, clean_v, loader=loader)
             if info and info.get("url"):
-                fname = info["filename"]
+                fname = _safe_download_filename(info.get("filename"), (".jar",))
+                if not fname:
+                    add_log(f"⚠️ Geçersiz mod dosya adı atlandı: {info.get('filename')!r}")
+                    continue
                 dest = os.path.join(target_mods_dir, fname)
                 if not os.path.exists(dest):
                     add_log(f"📥 İndiriliyor ({clean_v} uyumlu): {fname}...")
-                    ModrinthFetcher.download_file(info["url"], dest)
+                    ModrinthFetcher.download_file(info["url"], dest, expected_size=info.get("size"))
                     add_log(f"✓ Başarıyla kuruldu: {fname}")
             else:
                 add_log(f"⚡ {slug} modu {clean_v} ({loader}) için henüz mevcut değil, atlandı.")
@@ -1073,7 +1197,7 @@ def fetch_modrinth_project_detail(slug):
             "success": True,
             "slug": safe_slug,
             "title": project.get("title") or safe_slug,
-            "description": project.get("body") or project.get("description") or "",
+            "description": str(project.get("body") or project.get("description") or "")[:65536],
             "categories": [str(c) for c in (project.get("categories") or [])],
             "icon_url": project.get("icon_url") or "",
             "downloads": project.get("downloads", 0),
@@ -1148,6 +1272,29 @@ def pick_modpack_version(versions, preferred_game_version=""):
     return candidates[0] if candidates else (None, None)
 
 
+instance_io_lock = threading.RLock()
+
+
+def atomic_write_json(path, data):
+    """JSON dosyasini ayni dizinde temp + fsync + replace ile atomik yazar."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def update_instance_config(inst_id, updates):
     inst_dir = get_instance_dir(inst_id)
     if not inst_dir:
@@ -1156,11 +1303,11 @@ def update_instance_config(inst_id, updates):
     if not os.path.exists(cfg_path):
         return None
     try:
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        cfg.update(updates)
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2)
+        with instance_io_lock:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            cfg.update(updates)
+            atomic_write_json(cfg_path, cfg)
         cfg["id"] = os.path.basename(inst_dir)
         cfg["mod_count"] = count_instance_mods(cfg["id"])
         return cfg
@@ -1226,11 +1373,11 @@ def load_content_manifest(inst_id):
 
 def save_content_manifest(inst_id, data):
     inst_dir = get_instance_dir(inst_id)
-    if not inst_dir:
+    if not inst_dir or not isinstance(data, dict):
         return
     try:
-        with open(os.path.join(inst_dir, "content_manifest.json"), "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        with instance_io_lock:
+            atomic_write_json(os.path.join(inst_dir, "content_manifest.json"), data)
     except Exception:
         pass
 
@@ -1241,19 +1388,20 @@ def register_installed_content(inst_id, category, slug, filename, version="", pr
     if not inst_dir or not slug:
         return
     cat = normalize_category(category)
-    data = load_content_manifest(inst_id)
-    data.setdefault(cat, {})
-    entry = {
-        "filename": filename,
-        "version": version,
-        "installed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    if project_id:
-        entry["project_id"] = project_id
-    if version_id:
-        entry["version_id"] = version_id
-    data[cat][str(slug)] = entry
-    save_content_manifest(inst_id, data)
+    with instance_io_lock:
+        data = load_content_manifest(inst_id)
+        data.setdefault(cat, {})
+        entry = {
+            "filename": filename,
+            "version": version,
+            "installed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        if project_id:
+            entry["project_id"] = project_id
+        if version_id:
+            entry["version_id"] = version_id
+        data[cat][str(slug)] = entry
+        save_content_manifest(inst_id, data)
 
 
 # ==================== MODRINTH KURULUM INDEKSI ====================
@@ -1285,8 +1433,8 @@ def save_modrinth_index(inst_id, data):
     if not inst_dir or not isinstance(data, dict):
         return
     try:
-        with open(os.path.join(inst_dir, MODRINTH_INDEX_FILE), "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        with instance_io_lock:
+            atomic_write_json(os.path.join(inst_dir, MODRINTH_INDEX_FILE), data)
     except Exception:
         pass
 
@@ -1294,30 +1442,32 @@ def save_modrinth_index(inst_id, data):
 def register_modrinth_index(inst_id, slug, filename, project_id="", version_id=""):
     if not inst_id or not slug:
         return
-    data = load_modrinth_index(inst_id)
-    data[str(slug)] = {
-        "filename": filename or "",
-        "project_id": project_id or "",
-        "version_id": version_id or "",
-    }
-    save_modrinth_index(inst_id, data)
+    with instance_io_lock:
+        data = load_modrinth_index(inst_id)
+        data[str(slug)] = {
+            "filename": filename or "",
+            "project_id": project_id or "",
+            "version_id": version_id or "",
+        }
+        save_modrinth_index(inst_id, data)
 
 
 def unregister_modrinth_index(inst_id, filenames):
     """Verilen dosya adlarina ait indeks kayitlarini temizler."""
-    data = load_modrinth_index(inst_id)
-    if not data:
-        return
-    targets = {str(f).lower() for f in (filenames or []) if f}
-    if not targets:
-        return
-    changed = False
-    for slug in [s for s, e in data.items()
-                 if isinstance(e, dict) and str(e.get("filename", "")).lower() in targets]:
-        data.pop(slug, None)
-        changed = True
-    if changed:
-        save_modrinth_index(inst_id, data)
+    with instance_io_lock:
+        data = load_modrinth_index(inst_id)
+        if not data:
+            return
+        targets = {str(f).lower() for f in (filenames or []) if f}
+        if not targets:
+            return
+        changed = False
+        for slug in [s for s, e in data.items()
+                     if isinstance(e, dict) and str(e.get("filename", "")).lower() in targets]:
+            data.pop(slug, None)
+            changed = True
+        if changed:
+            save_modrinth_index(inst_id, data)
 
 
 # ==================== MOD BAGIMLILIK COZUCU ====================
@@ -1452,7 +1602,12 @@ def swap_installed_version(inst_id, category, slug, version, target_dir):
     new_disk_name = safe_new + ".disabled" if old_disabled else safe_new
     new_dest = os.path.join(folder, new_disk_name)
 
-    # Eski dosya(lar)i sil; yeni dosyayla ayni olana dokunma.
+    # Once yeni dosyayi indir; basarisiz olursa eski calisan surum yerinde kalsin.
+    add_log(f"⇄ Sürüm değiştiriliyor: {slug} → {new_disk_name}")
+    ModrinthFetcher.download_file(primary["url"], new_dest, expected_size=primary.get("size"))
+    add_log(f"✓ Yeni sürüm kuruldu: {new_disk_name}")
+
+    # Yeni dosya guvenle yazildiktan sonra eski dosya(lar)i sil.
     replaced = None
     if safe_old:
         for cand in (safe_old, safe_old + ".disabled"):
@@ -1466,10 +1621,6 @@ def swap_installed_version(inst_id, category, slug, version, target_dir):
                     os.remove(cand_path)
                 except Exception as e:
                     add_log(f"⚠️ Eski sürüm dosyası silinemedi ({cand}): {e}")
-
-    add_log(f"⇄ Sürüm değiştiriliyor: {slug} → {new_disk_name}")
-    ModrinthFetcher.download_file(primary["url"], new_dest)
-    add_log(f"✓ Yeni sürüm kuruldu: {new_disk_name}")
 
     # Hash onbellegindeki eski/yeni kayitlari temizle (yeniden hesaplanacak).
     hashes = load_modrinth_hashes(inst_id)
@@ -1569,19 +1720,29 @@ def install_required_dependencies(inst_id, target_dir, game_version, loader,
             project_cache[pid] = fetch_modrinth_project(pid) or {}
         return project_cache[pid]
 
+    def file_present(name):
+        lower = str(name or "").lower()
+        if not lower:
+            return False
+        return lower in installed_files or (lower + ".disabled") in installed_files
+
     def already_installed(project_id, version_id, filename):
         pid, vid = str(project_id or ""), str(version_id or "")
         if pid and pid in installed_pids:
             for entry in index.values():
                 if isinstance(entry, dict) and str(entry.get("project_id")) == pid:
-                    return str(entry.get("filename") or filename or "")
-            return filename or ""
+                    candidate = str(entry.get("filename") or filename or "")
+                    if file_present(candidate):
+                        return candidate
+                    break
         if vid and vid in installed_vids:
             for entry in index.values():
                 if isinstance(entry, dict) and str(entry.get("version_id")) == vid:
-                    return str(entry.get("filename") or filename or "")
-            return filename or ""
-        if filename and str(filename).lower() in installed_files:
+                    candidate = str(entry.get("filename") or filename or "")
+                    if file_present(candidate):
+                        return candidate
+                    break
+        if filename and file_present(filename):
             return str(filename)
         return None
 
@@ -1637,9 +1798,9 @@ def install_required_dependencies(inst_id, target_dir, game_version, loader,
                 result["failed_dependencies"].append({"slug": slug, "reason": "indirilebilir dosya yok"})
                 continue
 
-            fname = primary.get("filename") or dep.get("file_name") or ""
+            fname = _safe_download_filename(primary.get("filename") or dep.get("file_name") or "", (".jar",))
             if not fname:
-                result["failed_dependencies"].append({"slug": slug, "reason": "dosya adı yok"})
+                result["failed_dependencies"].append({"slug": slug, "reason": "geçersiz dosya adı"})
                 continue
 
             existing = already_installed(real_pid, dep_version.get("id"), fname)
@@ -1658,7 +1819,7 @@ def install_required_dependencies(inst_id, target_dir, game_version, loader,
                 continue
 
             try:
-                ModrinthFetcher.download_file(primary["url"], dest)
+                ModrinthFetcher.download_file(primary["url"], dest, expected_size=primary.get("size"))
             except Exception as e:
                 set_net_error("modrinth_dependency_download", e)
                 log_error(f"Bağımlılık indirme hatası ({slug}): {type(e).__name__}: {e}")
@@ -1745,10 +1906,8 @@ def save_modrinth_hashes(inst_id, data):
     if not inst_dir or not isinstance(data, dict):
         return
     try:
-        tmp = os.path.join(inst_dir, MODRINTH_HASHES_FILE + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp, os.path.join(inst_dir, MODRINTH_HASHES_FILE))
+        with instance_io_lock:
+            atomic_write_json(os.path.join(inst_dir, MODRINTH_HASHES_FILE), data)
     except Exception:
         pass
 
@@ -2187,12 +2346,28 @@ def read_content_metadata(file_path, category):
     try:
         import zipfile
         with zipfile.ZipFile(file_path) as zf:
-            names = set(zf.namelist())
+            infos = zf.infolist()
+            if len(infos) > 20000:
+                return meta
+            info_by_name = {i.filename: i for i in infos}
+            names = set(info_by_name)
+
+            def read_limited(entry_name, limit=4 * 1024 * 1024):
+                info = info_by_name.get(entry_name)
+                if not info or info.file_size > limit:
+                    return None
+                try:
+                    return zf.read(entry_name)
+                except Exception:
+                    return None
 
             if category == "mod":
                 if "fabric.mod.json" in names:
+                    raw_meta = read_limited("fabric.mod.json")
+                    if raw_meta is None:
+                        return meta
                     try:
-                        data = json.loads(zf.read("fabric.mod.json").decode("utf-8", "replace"))
+                        data = json.loads(raw_meta.decode("utf-8", "replace"))
                     except Exception:
                         data = {}
                     if isinstance(data, dict):
@@ -2212,8 +2387,11 @@ def read_content_metadata(file_path, category):
                         if isinstance(icon, str):
                             meta["icon_entry"] = icon.lstrip("/")
                 elif "quilt.mod.json" in names:
+                    raw_meta = read_limited("quilt.mod.json")
+                    if raw_meta is None:
+                        return meta
                     try:
-                        data = json.loads(zf.read("quilt.mod.json").decode("utf-8", "replace"))
+                        data = json.loads(raw_meta.decode("utf-8", "replace"))
                     except Exception:
                         data = {}
                     loader_meta = (data.get("quilt_loader") or {}) if isinstance(data, dict) else {}
@@ -2227,7 +2405,10 @@ def read_content_metadata(file_path, category):
                         meta["icon_entry"] = qmeta.get("icon").lstrip("/")
 
                 if not meta["display_name"] and "META-INF/mods.toml" in names:
-                    text = zf.read("META-INF/mods.toml").decode("utf-8", "replace")
+                    raw_toml = read_limited("META-INF/mods.toml", 1024 * 1024)
+                    if raw_toml is None:
+                        return meta
+                    text = raw_toml.decode("utf-8", "replace")
                     m = re.search(r'displayName\s*=\s*["\']([^"\']+)["\']', text)
                     if m:
                         meta["display_name"] = m.group(1)
@@ -2258,8 +2439,11 @@ def read_content_metadata(file_path, category):
                 if "pack.png" in names:
                     meta["icon_entry"] = "pack.png"
                 if "pack.mcmeta" in names:
+                    raw_mcmeta = read_limited("pack.mcmeta", 1024 * 1024)
+                    if raw_mcmeta is None:
+                        return meta
                     try:
-                        mcmeta = json.loads(zf.read("pack.mcmeta").decode("utf-8", "replace"))
+                        mcmeta = json.loads(raw_mcmeta.decode("utf-8", "replace"))
                         desc = (mcmeta.get("pack") or {}).get("description")
                         if isinstance(desc, dict):
                             desc = desc.get("text") or desc.get("translate") or ""
@@ -2273,6 +2457,8 @@ def read_content_metadata(file_path, category):
     except Exception:
         pass
 
+    meta["description"] = str(meta.get("description") or "")[:4096]
+    meta["display_name"] = str(meta.get("display_name") or "")[:200]
     cache_content_metadata(cache_key, meta)
     return meta
 
@@ -2288,7 +2474,8 @@ def extract_content_icon(file_path, category, meta):
     try:
         import zipfile
         with zipfile.ZipFile(file_path) as zf:
-            if entry not in zf.namelist():
+            info = zf.getinfo(entry)
+            if info.file_size > 4 * 1024 * 1024:
                 return None, None
             raw = zf.read(entry)
     except Exception:
@@ -2380,19 +2567,26 @@ def delete_instance_content(inst_id, category, name):
 
     raw_name = str(name or "").strip()
     safe = os.path.basename(raw_name)
-    if not safe or safe != raw_name:
+    if not safe or safe != raw_name or safe in (".", "..") or "\x00" in safe:
         return False, "Geçersiz dosya adı."
 
     cat = normalize_category(category)
-    target = os.path.join(inst_dir, CATEGORY_DIRS[cat], safe)
-    if os.path.isdir(target):
+    cat_root = os.path.realpath(os.path.join(inst_dir, CATEGORY_DIRS[cat]))
+    target = os.path.join(cat_root, safe)
+    if os.path.islink(target):
+        return False, "Geçersiz dosya adı."
+    real_target = os.path.realpath(target)
+    if os.path.dirname(real_target) != cat_root:
+        return False, "Geçersiz dosya adı."
+
+    if os.path.isdir(real_target):
         try:
-            shutil.rmtree(target)
+            shutil.rmtree(real_target)
         except Exception as e:
             return False, f"Klasör silinemedi: {e}"
-    elif os.path.isfile(target):
+    elif os.path.isfile(real_target):
         try:
-            os.remove(target)
+            os.remove(real_target)
         except Exception as e:
             return False, f"Dosya silinemedi: {e}"
     else:
@@ -2426,8 +2620,10 @@ def toggle_instance_content(inst_id, category, name):
         return False, "Geçersiz dosya adı.", False
 
     cat = normalize_category(category)
-    folder = os.path.join(inst_dir, CATEGORY_DIRS[cat])
+    folder = os.path.realpath(os.path.join(inst_dir, CATEGORY_DIRS[cat]))
     src = os.path.join(folder, safe)
+    if os.path.islink(src) or os.path.dirname(os.path.realpath(src)) != folder:
+        return False, "Geçersiz dosya adı.", False
     if not os.path.exists(src):
         return False, "İçerik bulunamadı.", False
 
@@ -2437,14 +2633,14 @@ def toggle_instance_content(inst_id, category, name):
             if not target_name:
                 return False, "Geçersiz dosya adı.", False
             target = os.path.join(folder, target_name)
-            if os.path.exists(target):
+            if os.path.islink(target) or os.path.exists(target):
                 return False, f"'{target_name}' zaten etkin.", False
             os.rename(src, target)
             return True, target_name, True
 
         target_name = safe + ".disabled"
         target = os.path.join(folder, target_name)
-        if os.path.exists(target):
+        if os.path.islink(target) or os.path.exists(target):
             return False, f"'{target_name}' zaten devre dışı.", False
         os.rename(src, target)
         return True, target_name, False
@@ -2517,21 +2713,32 @@ def install_modpack_background(inst_id, pack_url):
             launch_version = minecraft_launcher_lib.mrpack.get_mrpack_launch_version(tmp_path) or ""
         except Exception as e:
             add_log(f"Modpack baslatma surumu okunamadi: {e}")
+        if not launch_version:
+            update_instance_config(inst_id, {
+                "install_status": "failed",
+                "install_progress": 100,
+                "install_detail": "Paket kuruldu ancak başlatma sürümü okunamadı; yeniden deneyin.",
+                "launch_version": "",
+            })
+            add_log(f"⚠️ Modpack başlatma sürümü okunamadı: {inst_id}")
+            return
         update_instance_config(inst_id, {
             "install_status": "ready",
             "install_progress": 100,
             "install_detail": "Hazır",
             "launch_version": launch_version,
         })
-        add_log(f"✓ Modpack kuruldu: {inst_id} (başlatma sürümü: {launch_version or 'yok'})")
+        add_log(f"✓ Modpack kuruldu: {inst_id} (başlatma sürümü: {launch_version})")
     except Exception as e:
         update_instance_config(inst_id, {"install_status": "failed", "install_detail": str(e)})
         add_log(f"Modpack kurulum hatasi ({inst_id}): {e}")
     finally:
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
+        for candidate in (tmp_path, tmp_path + ".part"):
+            try:
+                if os.path.exists(candidate):
+                    os.remove(candidate)
+            except Exception:
+                pass
 
 
 # ==================== MOJANG SURUMLER MANIFESTI ====================
@@ -2546,12 +2753,21 @@ def set_net_error(where, exc):
     return NET_LAST_ERROR
 
 
+_VERSIONS_CACHE_LOCK = threading.Lock()
+_VERSIONS_MEM_CACHE = {"time": 0.0, "items": None}
+_VERSIONS_MEM_TTL = 300.0
+
+
 def get_complete_version_manifest():
     """Mojang manifestini ceker; ag hatasinda onbellek, olmazsa küratör listeye duser."""
     global LAST_MANIFEST_ERROR
+    now = time.time()
+    with _VERSIONS_CACHE_LOCK:
+        if _VERSIONS_MEM_CACHE["items"] and (now - _VERSIONS_MEM_CACHE["time"]) < _VERSIONS_MEM_TTL:
+            return list(_VERSIONS_MEM_CACHE["items"])
     try:
         url = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
-        req = urllib.request.Request(url, headers={"User-Agent": "Freesm/CookieLauncher/3.0.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "Freesm/CookieLauncher/3.1.0"})
         # macOS'ta sistem kok sertifikalari bulunamazsa burasi patlar; certifi
         # tabanli SSL_CONTEXT ile dogru CA demeti kullanilir.
         with urllib.request.urlopen(req, timeout=8, context=SSL_CONTEXT) as resp:
@@ -2567,8 +2783,10 @@ def get_complete_version_manifest():
                 })
         if items:
             try:
-                with open(VERSIONS_CACHE_FILE, "w", encoding="utf-8") as f:
-                    json.dump(items, f, indent=2)
+                with _VERSIONS_CACHE_LOCK:
+                    atomic_write_json(VERSIONS_CACHE_FILE, items)
+                    _VERSIONS_MEM_CACHE["time"] = time.time()
+                    _VERSIONS_MEM_CACHE["items"] = list(items)
             except Exception:
                 pass
             LAST_MANIFEST_ERROR = ""
@@ -2586,6 +2804,9 @@ def get_complete_version_manifest():
             with open(VERSIONS_CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list) and len(data) > 0:
+                with _VERSIONS_CACHE_LOCK:
+                    _VERSIONS_MEM_CACHE["time"] = time.time()
+                    _VERSIONS_MEM_CACHE["items"] = list(data)
                 return data
         except Exception:
             pass
@@ -2618,7 +2839,7 @@ def run_net_selftest():
         t0 = time.time()
         entry = {"name": name, "url": url}
         try:
-            r = requests.get(url, timeout=8, headers={"User-Agent": "Freesm/CookieLauncher/3.0.0"})
+            r = requests.get(url, timeout=8, headers={"User-Agent": "Freesm/CookieLauncher/3.1.0"})
             entry["ok"] = r.status_code == 200
             entry["http"] = r.status_code
         except Exception as e:
@@ -2630,7 +2851,7 @@ def run_net_selftest():
     # Mojang manifesti urllib ile cekiliyor: onu da ayrica test et
     urllib_entry = {"name": "urllib_piston", "url": targets[1][1]}
     try:
-        req = urllib.request.Request(targets[1][1], headers={"User-Agent": "Freesm/CookieLauncher/3.0.0"})
+        req = urllib.request.Request(targets[1][1], headers={"User-Agent": "Freesm/CookieLauncher/3.1.0"})
         with urllib.request.urlopen(req, timeout=8, context=SSL_CONTEXT) as resp:
             urllib_entry["ok"] = getattr(resp, "status", 200) == 200
             urllib_entry["http"] = getattr(resp, "status", 200)
@@ -2660,7 +2881,7 @@ def run_game_background_task(params):
     add_log("🚀 Arka plan başlatma görevi başladı.")
 
     try:
-        username = (params.get("username") or "Steve").strip() or "Steve"
+        username = (params.get("username") or "Steve").strip()[:32] or "Steve"
         # Profil secilmeden ve acik bir surum verilmeden baslatma YOK.
         # Aksi hâlde global .minecraft klasorune rastgele bir surum indirilip
         # oyun baslatiliyordu (kullanicinin "profil yokken 26.3 indirdi" hatasi).
@@ -2670,9 +2891,17 @@ def run_game_background_task(params):
             )
         raw_version = str(params.get("version") or "").strip()
         loader = (params.get("loader") or "fabric").lower()
-        cookie_opt = params.get("cookie_optimized", True)
-        ram_gb = int(params.get("ram", get_optimal_ram_allocation()))
-        custom_java = (params.get("custom_java") or "").strip()
+        cookie_opt = _as_bool(params.get("cookie_optimized"), True)
+        try:
+            ram_gb = int(params.get("ram", get_optimal_ram_allocation()))
+        except (TypeError, ValueError):
+            ram_gb = get_optimal_ram_allocation()
+        ram_gb = max(2, min(64, ram_gb))
+        # custom_java yalnizca yerel bir istemciden gelmeli; HTTP uzerinden
+        # keyfi bir calistirilabilir dosya kabul etmek RCE yuzeyi acar.
+        custom_java = ""
+        if params.get("custom_java"):
+            add_log("⚠️ HTTP üzerinden gelen custom_java yok sayıldı.")
         jvm_preset = params.get("jvm_preset", "aikar")
 
         clean_v = clean_minecraft_version(raw_version)
@@ -2743,7 +2972,7 @@ def run_game_background_task(params):
             progress=0.66,
         )
         java_exec = resolve_java_executable(
-            version_to_run, custom_java=custom_java, callback=make_progress_callbacks(5, 10)
+            version_to_run, custom_java=custom_java, callback=make_progress_callbacks(66, 4)
         )
         add_log(f"Seçilen Java Yürütücüsü: {java_exec}")
 
@@ -2788,8 +3017,12 @@ def run_game_background_task(params):
                         version_to_run = fallback_id
                 add_log(f"{loader_label} hazır: {version_to_run}")
             except Exception as le:
-                add_log(f"{loader_label} kurulum uyarısı: {le}. Vanilla ile devam ediliyor.")
-                version_to_run = clean_v
+                # Sessizce vanilla'ya dusmek, kullanicinin modlarinin yuklenmemesine
+                # ve yanlis surumle oyun acilmasina yol acar. Acik hata ver.
+                raise RuntimeError(
+                    f"{loader_label} yükleyicisi kurulamadı: {le}. "
+                    "İnternet bağlantısını kontrol edip tekrar deneyin."
+                )
 
         # 5. COOKIE LAUNCHER OZEL OPTIMIZE ENJEKTORU
         if cookie_opt:
@@ -2848,13 +3081,13 @@ def run_game_background_task(params):
 
         options = {
             "username": username,
-            "uuid": "00000000-0000-0000-0000-000000000000",
+            "uuid": offline_uuid(username),
             "token": "0",
             "gameDirectory": game_dir,
             "jvmArguments": jvm_args,
             "executablePath": java_exec,
             "launcherName": "CookieLauncher",
-            "launcherVersion": "3.0.0",
+            "launcherVersion": "3.1.0",
         }
 
         update_state(
@@ -2896,9 +3129,11 @@ def run_game_background_task(params):
 
         def log_streamer():
             try:
-                for line in iter(proc.stdout.readline, ""):
-                    if line:
-                        add_log(line.strip())
+                while True:
+                    line = proc.stdout.readline(64 * 1024)
+                    if not line:
+                        break
+                    add_log(line.strip())
             except Exception:
                 pass
             finally:
@@ -2914,6 +3149,7 @@ def run_game_background_task(params):
                 launch_state["minecraft_pid"] = None
                 launch_state["progress"] = 0.0
                 launch_state["percent"] = 0
+                launch_state["launch_instance_id"] = None
                 if ret != 0:
                     launch_state["status"] = "Oyun beklenmedik şekilde kapandı."
                     launch_state["detail"] = f"Çıkış kodu: {ret}. Konsol sekmesini kontrol edin."
@@ -2939,6 +3175,7 @@ def run_game_background_task(params):
             status="Başlatma Hatası!",
             detail=str(e),
             error=str(e),
+            launch_instance_id=None,
         )
 
 
@@ -2960,9 +3197,12 @@ def _safe_asset_path(base_dir, raw_name, allowed_exts=None):
         return None
     if "\x00" in raw or os.path.isabs(raw):
         return None
-    base = os.path.abspath(base_dir)
-    fp = os.path.abspath(os.path.join(base, raw))
-    if not fp.startswith(base + os.sep):
+    base = os.path.realpath(base_dir)
+    candidate = os.path.join(base, raw)
+    if os.path.islink(candidate):
+        return None
+    fp = os.path.realpath(candidate)
+    if fp != base and not fp.startswith(base + os.sep):
         return None
     if allowed_exts and not fp.lower().endswith(tuple(allowed_exts)):
         return None
@@ -2973,11 +3213,28 @@ def _safe_world_dir(inst_dir, raw_world):
     """Profilin saves/ klasoru altindaki dunya klasorunu dogrular."""
     if not inst_dir:
         return None
-    saves = os.path.abspath(os.path.join(inst_dir, "saves"))
+    saves = os.path.join(inst_dir, "saves")
+    if os.path.islink(saves):
+        return None
     wd = _safe_asset_path(saves, raw_world)
     if not wd or os.path.islink(wd) or not os.path.isdir(wd):
         return None
     return wd
+
+
+def _safe_download_filename(raw_name, allowed_exts=(".jar", ".zip")):
+    """Modrinth/CDN'den gelen dosya adini guvenli tek dosya adina indirger."""
+    raw = str(raw_name or "").strip()
+    if not raw or "\x00" in raw:
+        return None
+    # Windows ayraclarini da normalize et; ardindan yalnizca basename kabul et.
+    normalized = raw.replace("\\", "/")
+    base = os.path.basename(normalized)
+    if not base or base in (".", "..") or base != normalized:
+        return None
+    if not base.lower().endswith(tuple(allowed_exts)):
+        return None
+    return base
 
 
 # --- Minimal NBT okuyucu (servers.dat icin; gzip + Compound/List/String yeterli) ---
@@ -3248,10 +3505,20 @@ def write_instance_note(inst_id, content):
     if not inst_dir or not os.path.isdir(inst_dir):
         return False, "Profil bulunamadı."
     text = str(content if content is not None else "")[:NOTE_MAX_CHARS]
+    note_path = os.path.join(inst_dir, NOTE_FILENAME)
+    tmp_path = f"{note_path}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
-        with open(os.path.join(inst_dir, NOTE_FILENAME), "w", encoding="utf-8") as f:
+        with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, note_path)
     except Exception as e:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
         return False, f"Not kaydedilemedi: {e}"
     return True, ""
 
@@ -3259,6 +3526,7 @@ def write_instance_note(inst_id, content):
 # ==================== HTTP REST API SUNUCUSU ====================
 class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
     server_version = "CookieLauncherCore/2.0"
+    timeout = 30
 
     def __init__(self, *args, **kwargs):
         static_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -3267,20 +3535,64 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-    # --- CORS: Tauri (tauri://localhost) ve tarayici istemcileri icin zorunlu ---
+    # --- CORS: yalnizca bilinen launcher origin'lerini yansit ---
+    def _origin(self):
+        return (self.headers.get("Origin") or "").strip()
+
+    def _origin_allowed(self):
+        origin = self._origin()
+        return (not origin) or origin in ALLOWED_ORIGINS
+
+    def _host_allowed(self):
+        """DNS rebinding'e karsi Host basligini gercek loopback portuyla esle."""
+        host = (self.headers.get("Host") or "").strip().lower()
+        if not host:
+            return True
+        try:
+            port = self.server.server_address[1]
+        except Exception:
+            port = 18420
+        allowed = {
+            f"127.0.0.1:{port}",
+            f"localhost:{port}",
+            f"[::1]:{port}",
+        }
+        return host in allowed
+
+    def _api_request_allowed(self, require_json=False):
+        if not self._host_allowed() or not self._origin_allowed():
+            self.send_json({"success": False, "error": "İzinsiz istek."}, 403)
+            return False
+        if require_json:
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                self.send_json({"success": False, "error": "Content-Type application/json olmalı."}, 415)
+                return False
+        return True
+
     def end_headers(self):
         try:
-            self.send_header("Access-Control-Allow-Origin", "*")
+            origin = self._origin()
+            if origin and origin in ALLOWED_ORIGINS:
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
-            self.send_header("Access-Control-Max-Age", "86400")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Max-Age", "600")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Frame-Options", "DENY")
         except Exception:
             pass
         super().end_headers()
 
     def do_OPTIONS(self):
-        # Preflight istegine aninda 204 ile yanit ver (Load Failed kok cozumu)
+        # Preflight: izinsiz origin'e CORS izni verme.
+        if not self._origin_allowed() or not self._host_allowed():
+            self.send_response(403)
+            self.end_headers()
+            return
         self.send_response(204)
         self.end_headers()
 
@@ -3302,16 +3614,20 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
             pass
 
     def serve_binary(self, file_path, mime, cache="no-store"):
-        """Ikili dosyayi (resim vb.) HTTP yaniti olarak sunar."""
+        """Ikili dosyayi (resim vb.) bellege tamamen almadan akitir."""
         try:
-            with open(file_path, "rb") as f:
-                raw = f.read()
+            size = os.path.getsize(file_path)
+            # Tek bir gorsel icin makul ust sinir; symlink/large-file sismesini engeller.
+            if size > 40 * 1024 * 1024:
+                self.send_json({"success": False, "error": "Dosya çok büyük."}, 413)
+                return
             self.send_response(200)
             self.send_header("Content-Type", mime or "application/octet-stream")
-            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Content-Length", str(size))
             self.send_header("Cache-Control", cache)
             self.end_headers()
-            self.wfile.write(raw)
+            with open(file_path, "rb") as f:
+                shutil.copyfileobj(f, self.wfile, 64 * 1024)
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception:
@@ -3327,9 +3643,12 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
             content_len = 0
         if content_len <= 0:
             return {}
+        if content_len > MAX_POST_BYTES:
+            return None
         try:
             post_bytes = self.rfile.read(content_len)
-            return json.loads(post_bytes.decode("utf-8"))
+            parsed = json.loads(post_bytes.decode("utf-8"))
+            return parsed if isinstance(parsed, dict) else {}
         except Exception:
             return {}
 
@@ -3346,18 +3665,21 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
         path = self.normalize_api_path(url.path)
         query = parse_qs(url.query)
 
+        if url.path.startswith("/api") and not self._api_request_allowed():
+            return
+
         try:
             # 0. Saglik / Surum Kontrolu (eski backend sureclerini ayirt etmek icin)
             if path == "/health":
                 self.send_json({
                     "success": True,
                     "app": "CookieLauncher",
-                    "version": "3.0.0",
+                    "version": "3.1.0",
                     "api_version": API_VERSION,
                     "features": ["instances", "modpack", "instance_mods", "content_manage",
                                  "content_icons", "loader_versions", "net_test",
                                  "profile_detail", "content_toggle", "mod_deps",
-                                 "profile_assets"],
+                                 "profile_assets", "gallery_file"],
                 })
                 return
 
@@ -3520,6 +3842,17 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
                             except Exception:
                                 pass
                 self.send_json({"success": True, "screenshots": shots})
+                return
+
+            # 5b. Tek global ekran goruntusu dosyasi (galeri thumbnaillari)
+            if path == "/screenshots/file":
+                sc_dir = os.path.join(minecraft_directory, "screenshots")
+                fp = _safe_asset_path(sc_dir, query.get("name", [""])[0], ASSET_IMAGE_EXTS)
+                if not fp or not os.path.isfile(fp):
+                    self.send_json({"success": False, "error": "Görüntü bulunamadı."}, 404)
+                    return
+                mime = mimetypes.guess_type(fp)[0] or "application/octet-stream"
+                self.serve_binary(fp, mime, "public, max-age=3600")
                 return
 
             # 6. Instances (Profiller) Listesi
@@ -3701,8 +4034,14 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
         url = urlparse(self.path)
         path = self.normalize_api_path(url.path)
 
+        if not self._api_request_allowed(require_json=True):
+            return
+
         try:
             body = self.get_post_body()
+            if body is None:
+                self.send_json({"success": False, "error": "İstek gövdesi çok büyük."}, 413)
+                return
 
             # 1. Non-Blocking Oyun Baslatma (ANINDA 200 OK doner!)
             if path in ("/launch", "/launch/"):
@@ -3714,32 +4053,35 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
                     })
                     return
 
+                # Kontrol ve durum isaretleme TEK kilit blogunda yapilmali;
+                # aksi halde iki /launch istegi ayni anda bos durumu gorup
+                # iki oyun sureci baslatabilir.
                 with state_lock:
-                    already_busy = bool(launch_state["is_installing"] or launch_state["is_running"])
+                    if launch_state["is_installing"] or launch_state["is_running"]:
+                        already_busy = True
+                    else:
+                        already_busy = False
+                        launch_state.update({
+                            "is_installing": True,
+                            "is_running": False,
+                            "progress": 0.02,
+                            "percent": 2,
+                            "status": "Başlatma isteği alındı...",
+                            "detail": "Arka plan iş parçacığı hazırlanıyor...",
+                            "current_file": "",
+                            "downloaded_bytes": 0,
+                            "downloaded_mb": 0.0,
+                            "error": None,
+                            "minecraft_pid": None,
+                            "started_at": time.time(),
+                            "launch_instance_id": instance_id,
+                        })
                 if already_busy:
                     self.send_json({
                         "success": False,
                         "error": "Oyun zaten çalışıyor veya hazırlanıyor. Lütfen bekleyin.",
                     })
                     return
-
-                # Durumu HTTP handler icinde senkron olarak isaretle:
-                # Boylece frontend polling'i ilk turda bile 'is_installing' gorur.
-                with state_lock:
-                    launch_state.update({
-                        "is_installing": True,
-                        "is_running": False,
-                        "progress": 0.02,
-                        "percent": 2,
-                        "status": "Başlatma isteği alındı...",
-                        "detail": "Arka plan iş parçacığı hazırlanıyor...",
-                        "current_file": "",
-                        "downloaded_bytes": 0,
-                        "downloaded_mb": 0.0,
-                        "error": None,
-                        "minecraft_pid": None,
-                        "started_at": time.time(),
-                    })
 
                 threading.Thread(target=run_game_background_task, args=(body,), daemon=True).start()
                 add_log("✓ /api/launch istegi alindi, islem arka plan thread'ine devredildi.")
@@ -3757,8 +4099,8 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
                 loader = (body.get("loader") or "fabric").lower()
                 instance_id = body.get("instance_id")
                 project_type = normalize_category(body.get("project_type") or body.get("content_type") or "mod")
-                force = bool(body.get("force"))
-                install_dependencies = bool(body.get("install_dependencies"))
+                force = _as_bool(body.get("force"))
+                install_dependencies = _as_bool(body.get("install_dependencies"))
                 category_dir = CATEGORY_DIRS[project_type]
 
                 if not slug:
@@ -3884,11 +4226,14 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
                             })
                             return
 
-                        fname = info["filename"]
+                        fname = _safe_download_filename(info.get("filename"), (".jar", ".zip"))
+                        if not fname:
+                            self.send_json({"success": False, "error": "Sunucudan geçersiz dosya adı geldi."})
+                            return
                         dest = os.path.join(target_dir, fname)
                         if not os.path.exists(dest):
                             add_log(f"📥 Modrinth'ten indiriliyor: {fname} → {target_label}")
-                            ModrinthFetcher.download_file(info["url"], dest)
+                            ModrinthFetcher.download_file(info["url"], dest, expected_size=info.get("size"))
                             add_log(f"✓ Başarıyla kuruldu: {fname}")
 
                         # CDN URL'inden proje/surum kimliklerini cikar (bagimlilik cozumu icin)
@@ -3992,15 +4337,22 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
 
                 base_id = re.sub(r"[^\w\-]", "_", pack_name.lower())[:50].strip("_") or f"pack_{int(time.time())}"
                 inst_id = base_id
-                suffix = 2
-                while True:
-                    existing = get_instance_dir(inst_id)
-                    if not existing or not os.path.isdir(existing):
-                        break
-                    inst_id = f"{base_id}_{suffix}"
+                inst_dir = None
+                suffix = 1
+                while suffix <= 999:
+                    candidate_id = base_id if suffix == 1 else f"{base_id}_{suffix}"
+                    candidate_dir = get_instance_dir(candidate_id)
+                    if candidate_dir:
+                        try:
+                            os.makedirs(candidate_dir, exist_ok=False)
+                            inst_id, inst_dir = candidate_id, candidate_dir
+                            break
+                        except FileExistsError:
+                            pass
                     suffix += 1
-
-                inst_dir = get_instance_dir(inst_id)
+                if not inst_dir:
+                    self.send_json({"success": False, "error": "Profil klasörü oluşturulamadı."})
+                    return
                 os.makedirs(os.path.join(inst_dir, "mods"), exist_ok=True)
                 cfg = {
                     "id": inst_id,
@@ -4016,8 +4368,7 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
                     "launch_version": "",
                     "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
-                with open(os.path.join(inst_dir, "instance.json"), "w", encoding="utf-8") as f:
-                    json.dump(cfg, f, indent=2)
+                atomic_write_json(os.path.join(inst_dir, "instance.json"), cfg)
                 cfg["mod_count"] = 0
                 add_log(f"📦 Modpack profili oluşturuldu: {pack_name}")
                 threading.Thread(
@@ -4057,17 +4408,31 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
 
             # 4. Instance (Profil) Olusturma
             if path in ("/instances/create", "/instances/create/"):
-                name = (body.get("name") or "Yeni Profil").strip()
+                name = (body.get("name") or "Yeni Profil").strip()[:80]
                 ver = (body.get("version") or "1.20.4").strip()
                 loader = (body.get("loader") or "fabric").lower()
+                if loader not in ("vanilla", "fabric", "forge", "neoforge", "quilt"):
+                    self.send_json({"success": False, "error": "Geçersiz mod yükleyici."})
+                    return
+                if not re.fullmatch(r"[0-9A-Za-z._\-]{1,40}", ver):
+                    self.send_json({"success": False, "error": "Geçersiz Minecraft sürümü."})
+                    return
                 # Opsiyonel: kullanicinin gelismis menuden sectigi loader surumu.
                 # Bos ise kurulum sirasinda Minecraft surumune uygun ONERILEN
                 # (stable) surum otomatik secilir.
-                loader_version = str(body.get("loader_version") or "").strip()
-                inst_id = re.sub(r"[^\w\-]", "_", name.lower()) or f"profil_{int(time.time())}"
+                loader_version = str(body.get("loader_version") or "").strip()[:40]
+                inst_id = re.sub(r"[^\w\-]", "_", name.lower())[:60] or f"profil_{int(time.time())}"
                 inst_dir = get_instance_dir(inst_id)
                 if not inst_dir:
                     self.send_json({"success": False, "error": "Geçersiz profil adı."})
+                    return
+                try:
+                    os.makedirs(inst_dir, exist_ok=False)
+                except FileExistsError:
+                    self.send_json({"success": False, "error": "Bu isimde bir profil zaten var."})
+                    return
+                except Exception as e:
+                    self.send_json({"success": False, "error": f"Profil klasörü oluşturulamadı: {e}"})
                     return
                 os.makedirs(os.path.join(inst_dir, "mods"), exist_ok=True)
                 cfg = {
@@ -4079,8 +4444,7 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
                     "icon": str(body.get("icon") or "").strip(),
                     "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
-                with open(os.path.join(inst_dir, "instance.json"), "w", encoding="utf-8") as f:
-                    json.dump(cfg, f, indent=2)
+                atomic_write_json(os.path.join(inst_dir, "instance.json"), cfg)
                 cfg["mod_count"] = count_instance_mods(inst_id)
                 add_log(f"🗂️ Yeni profil oluşturuldu: {name} (MC {ver} • {loader})")
                 self.send_json({"success": True, "instance": cfg})
@@ -4094,20 +4458,22 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json({"success": False, "error": "Profil bulunamadı."})
                     return
                 try:
-                    with open(cfg_path, "r", encoding="utf-8") as f:
-                        cfg = json.load(f)
-                    if body.get("name"):
-                        new_name = str(body["name"]).strip()
-                        if new_name:
-                            cfg["name"] = new_name
-                    if body.get("version"):
-                        cfg["version"] = clean_minecraft_version(str(body["version"]).strip())
-                    if body.get("loader"):
-                        cfg["loader"] = str(body["loader"]).strip().lower()
-                    if "icon" in body:
-                        cfg["icon"] = str(body.get("icon") or "").strip()
-                    with open(cfg_path, "w", encoding="utf-8") as f:
-                        json.dump(cfg, f, indent=2)
+                    with instance_io_lock:
+                        with open(cfg_path, "r", encoding="utf-8") as f:
+                            cfg = json.load(f)
+                        if body.get("name"):
+                            new_name = str(body["name"]).strip()[:80]
+                            if new_name:
+                                cfg["name"] = new_name
+                        if body.get("version"):
+                            cfg["version"] = clean_minecraft_version(str(body["version"]).strip())
+                        if body.get("loader"):
+                            new_loader = str(body["loader"]).strip().lower()
+                            if new_loader in ("vanilla", "fabric", "forge", "neoforge", "quilt"):
+                                cfg["loader"] = new_loader
+                        if "icon" in body:
+                            cfg["icon"] = str(body.get("icon") or "").strip()
+                        atomic_write_json(cfg_path, cfg)
                     cfg["id"] = os.path.basename(inst_dir)
                     cfg["mod_count"] = count_instance_mods(cfg["id"])
                     self.send_json({"success": True, "instance": cfg})
@@ -4117,12 +4483,25 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
 
             # 6. Instance (Profil) Silme
             if path in ("/instances/delete", "/instances/delete/"):
-                inst_dir = get_instance_dir(body.get("id", ""))
+                inst_id = body.get("id", "")
+                inst_dir = get_instance_dir(inst_id)
                 if not inst_dir or not os.path.isdir(inst_dir):
                     self.send_json({"success": False, "error": "Profil bulunamadı."})
                     return
+                cfg = load_instance_config(inst_id)
+                if cfg and cfg.get("install_status") == "installing":
+                    self.send_json({"success": False, "error": "Bu profil hâlâ kuruluyor; önce kurulumun bitmesini bekleyin."})
+                    return
+                with state_lock:
+                    same_instance_busy = (
+                        str(launch_state.get("launch_instance_id") or "") == str(cfg.get("id") if cfg else inst_id)
+                        and (launch_state["is_running"] or launch_state["is_installing"])
+                    )
+                if same_instance_busy:
+                    self.send_json({"success": False, "error": "Bu profilin oyunu çalışıyor; önce oyunu kapatın."})
+                    return
                 try:
-                    shutil.rmtree(inst_dir, ignore_errors=True)
+                    shutil.rmtree(inst_dir, ignore_errors=False)
                     add_log(f"🗑️ Profil silindi: {os.path.basename(inst_dir)}")
                     self.send_json({"success": True, "message": "Profil silindi."})
                 except Exception as e:
@@ -4408,6 +4787,25 @@ class CookieLauncherServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
     request_queue_size = 64
+    _request_slots = threading.BoundedSemaphore(48)
+
+    def process_request(self, request, client_address):
+        # Sinirsiz thread acilmasini engelle.
+        self._request_slots.acquire()
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            try:
+                self._request_slots.release()
+            except ValueError:
+                pass
 
 
 tracker_installed = False
@@ -4421,9 +4819,10 @@ def ensure_download_tracker():
 
 
 def start_server(port=18420):
+    reconcile_stale_installs()
     ensure_download_tracker()
     handler = CookieLauncherHTTPHandler
-    for p in [port, 18421, 18422, 18423, 0]:
+    for p in [port, 18421, 18422, 18423, 18424, 18425]:
         try:
             httpd = CookieLauncherServer(("127.0.0.1", p), handler)
             actual_port = httpd.server_address[1]

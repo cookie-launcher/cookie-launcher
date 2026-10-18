@@ -1,20 +1,26 @@
 #!/bin/bash
 # ==============================================================================
-# CookieLauncher Windows Setup.exe (.exe / NSIS) Derleme Komutu
+# CookieLauncher Windows Setup.exe (.exe / NSIS) derleme yardımcısı
 # ==============================================================================
+set -euo pipefail
+cd "$(dirname "$0")"
 
 echo "=========================================================="
-echo "🍪 CookieLauncher Windows Setup.exe (.exe) Derleyici"
+echo "CookieLauncher Windows Setup.exe derleyicisi"
 echo "=========================================================="
-echo ""
-echo "Windows ortamında veya GitHub Actions üzerinde:"
-echo "  1. npm run tauri build"
-echo "komutu doğrudan 'src-tauri/target/release/bundle/nsis/' klasörüne"
-echo "'CookieLauncher_x64-setup.exe' dosyasını üretecektir."
-echo ""
-echo "Eğer Linux üzerinden Cross-Compile yapmak isterseniz:"
-echo "  rustup target add x86_64-pc-windows-msvc"
-echo "  cargo tauri build --target x86_64-pc-windows-msvc"
-echo ""
-echo "Gerekli tüm NSIS ve tauri.conf.json ayarları eksiksiz yapılandırıldı!"
-echo "=========================================================="
+
+if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || "${OSTYPE:-}" == win32* ]]; then
+  echo "Windows ortamı algılandı; NSIS paketi derleniyor..."
+  npm run tauri:build
+  echo "Çıktı: src-tauri/target/release/bundle/nsis/"
+else
+  echo "Bu betik Windows üzerinde çalıştırılmalıdır."
+  echo ""
+  echo "Windows'ta:"
+  echo "  npm run tauri:build"
+  echo ""
+  echo "veya GitHub Actions üzerinden .github/workflows/release.yml kullanın."
+  echo "Linux'tan cross-compile için:"
+  echo "  rustup target add x86_64-pc-windows-msvc"
+  echo "  cargo tauri build --target x86_64-pc-windows-msvc"
+fi

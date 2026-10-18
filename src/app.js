@@ -58,13 +58,21 @@ const state = {
   // Başlatma / Polling
   isPollingStatus: false,
   statusTimer: null,
+  pollInFlight: false,
   pollTick: 0,
   coreFailCount: 0,
   launchRequested: false,
+  launchAcceptedAt: 0,
   progressOpen: false,
   progressDismissed: false,
   progressCloseTimer: null,
-  lastErrorShown: null
+  lastErrorShown: null,
+
+  // İstek yarışlarını önleyen monoton sayaçlar
+  modrinthReqId: 0,
+  creatingInstance: false,
+  instanceQuery: "",
+  instanceSort: localStorage.getItem("cl_instance_sort") || "created"
 };
 
 // Backend'e erişilemezse gösterilecek yerel sürüm listesi (uygulama asla boş kalmasın)
@@ -83,11 +91,54 @@ function escapeHtml(str) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function updateApiStatusText() {
+  const value = API_BASE.replace(/^https?:\/\//, "");
+  const statusEl = document.getElementById("statusApiText");
+  if (statusEl) statusEl.textContent = value;
+  const settingsEl = document.getElementById("settingsApiText");
+  if (settingsEl) settingsEl.textContent = value;
+}
+
+function lastPlayedKey(instanceId) {
+  return `cl_last_played_${String(instanceId || "")}`;
+}
+
+function getLastPlayed(instanceId) {
+  const raw = Number(localStorage.getItem(lastPlayedKey(instanceId)) || 0);
+  return Number.isFinite(raw) ? raw : 0;
+}
+
+function setLastPlayed(instanceId) {
+  if (!instanceId) return;
+  try {
+    localStorage.setItem(lastPlayedKey(instanceId), String(Date.now()));
+  } catch (_) {}
+}
+
+function formatPlayed(ts) {
+  if (!ts) return "hiç oynanmadı";
+  const diff = Date.now() - ts;
+  if (diff < 60000) return "az önce";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)} dk önce`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)} sa önce`;
+  return new Date(ts).toLocaleDateString("tr-TR", { day: "2-digit", month: "short" });
+}
+
+function safeExternalUrl(raw) {
+  try {
+    const url = new URL(String(raw || ""), window.location.href);
+    return (url.protocol === "http:" || url.protocol === "https:") ? url.href : "";
+  } catch (_) {
+    return "";
+  }
 }
 
 function showToast(message, type = "info") {
@@ -139,12 +190,12 @@ function modInstallToast(name, data) {
   const label = name || (data && data.filename) || "İçerik";
   if (failed.length > 0) {
     console.warn("Kurulamayan bağımlılıklar:", failed);
-    showToast(`⚠️ ${label} kuruldu ama ${failed.length} bağımlılık kurulamadı`, "error");
+    showToast(` ${label} kuruldu ama ${failed.length} bağımlılık kurulamadı`, "error");
   } else if (installed.length > 0) {
     const names = installed.map(d => d.title || d.slug).filter(Boolean).join(", ");
-    showToast(`✓ ${label} kuruldu • ${installed.length} bağımlılık: ${names}`, "success");
+    showToast(` ${label} kuruldu • ${installed.length} bağımlılık: ${names}`, "success");
   } else {
-    showToast(`✓ ${label} kuruldu.`, "success");
+    showToast(` ${label} kuruldu.`, "success");
   }
 }
 
@@ -187,7 +238,7 @@ async function apiPost(path, body, timeoutMs = 15000) {
 }
 
 async function detectApiBase() {
-  for (const port of [18420, 18421, 18422, 18423]) {
+  for (const port of [18420, 18421, 18422, 18423, 18424, 18425]) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 900);
     try {
@@ -198,8 +249,9 @@ async function detectApiBase() {
       if (res.ok) {
         const data = await res.json();
         // Eski/stale backend süreçlerini atla: yalnızca güncel API sürümü kabul
-        if (data && Number(data.api_version) >= 14) {
+        if (data && Number(data.api_version) >= 15) {
           API_BASE = `http://127.0.0.1:${port}`;
+          updateApiStatusText();
           return true;
         }
       }
@@ -213,15 +265,26 @@ async function detectApiBase() {
 }
 
 // ================== BAŞLATMA (INIT) ==================
+window.addEventListener("unhandledrejection", (event) => {
+  console.error("Beklenmeyen istisna:", event.reason);
+  showToast("Beklenmeyen bir hata oluştu; konsolu kontrol edin.", "error");
+});
+
 document.addEventListener("DOMContentLoaded", async () => {
-  await detectApiBase();
-  initUI();
-  setupEventListeners();
-  loadVersions();
-  loadInstances();
-  startStatusPolling();
-  setupTauriWindowControls();
-  initProfileDetailScreen();
+  try {
+    await detectApiBase();
+    initUI();
+    setupEventListeners();
+    loadVersions().catch(() => {});
+    await loadInstances();
+    loadRecentWorlds();
+    startStatusPolling();
+    setupTauriWindowControls();
+    initProfileDetailScreen();
+  } catch (err) {
+    console.error("Başlatma hatası:", err);
+    showToast("Launcher başlatılırken bir hata oluştu.", "error");
+  }
 });
 
 function initUI() {
@@ -231,7 +294,10 @@ function initUI() {
   const vInput = document.getElementById("versionInput");
   if (vInput) vInput.value = state.selectedVersion;
 
-  const lRadio = document.querySelector(`input[name="loaderRadio"][value="${state.loader}"]`);
+  const validLoader = ["vanilla", "fabric", "forge", "neoforge", "quilt"].includes(String(state.loader).toLowerCase())
+    ? String(state.loader).toLowerCase()
+    : "fabric";
+  const lRadio = document.querySelector(`input[name="loaderRadio"][value="${validLoader}"]`);
   if (lRadio) {
     lRadio.checked = true;
     document.querySelectorAll('input[name="loaderRadio"]').forEach(r => {
@@ -272,6 +338,134 @@ function updateRamUI() {
   }
 }
 
+// ================== KONSOL ARAÇLARI ==================
+function isConsoleAutoscrollEnabled() {
+  const cb = document.getElementById("consoleAutoscroll");
+  return !cb || cb.checked;
+}
+
+async function copyConsoleOutput() {
+  const out = document.getElementById("consoleOutput");
+  if (!out) return;
+  const text = out.textContent || "";
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast("Konsol panoya kopyalandı.", "success");
+  } catch (_) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+      showToast("Konsol panoya kopyalandı.", "success");
+    } catch (err) {
+      showToast("Konsol kopyalanamadı.", "error");
+    }
+    ta.remove();
+  }
+}
+
+function exportConsoleOutput() {
+  const out = document.getElementById("consoleOutput");
+  if (!out) return;
+  const blob = new Blob([out.textContent || ""], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `cookie-launcher-konsol-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.log`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ================== KISAYOLLAR ==================
+function openShortcutsModal() {
+  const modal = document.getElementById("shortcutsModal");
+  if (!modal) return;
+  modal.style.display = "flex";
+  modal.setAttribute("aria-hidden", "false");
+}
+
+function closeShortcutsModal() {
+  const modal = document.getElementById("shortcutsModal");
+  if (!modal) return;
+  modal.style.display = "none";
+  modal.setAttribute("aria-hidden", "true");
+}
+
+function isTypingTarget(el) {
+  if (!el) return false;
+  const tag = String(el.tagName || "").toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" ||
+    el.isContentEditable === true;
+}
+
+function setupGlobalShortcuts() {
+  document.addEventListener("keydown", (e) => {
+    if (e.defaultPrevented) return;
+    const typing = isTypingTarget(e.target);
+    const mod = e.ctrlKey || e.metaKey;
+
+    if (mod && !e.altKey) {
+      const tabMap = { "1": "tab-play", "2": "tab-instances", "3": "tab-modrinth", "4": "tab-gallery", "5": "tab-console" };
+      if (tabMap[e.key]) {
+        e.preventDefault();
+        switchTab(tabMap[e.key]);
+        return;
+      }
+      if (String(e.key).toLowerCase() === "k") {
+        e.preventDefault();
+        switchTab("tab-modrinth");
+        const input = document.getElementById("modrinthSearchInput");
+        if (input) { input.focus(); input.select(); }
+        return;
+      }
+    }
+
+    if (typing) return;
+
+    if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
+      e.preventDefault();
+      openShortcutsModal();
+      return;
+    }
+
+    if (e.key === "Enter") {
+      const activePane = document.querySelector(".tab-pane.active");
+      const modalOpen = Array.from(document.querySelectorAll(".modal-backdrop"))
+        .some(m => m && m.style.display === "flex");
+      if (!modalOpen && activePane && activePane.id === "tab-play") {
+        e.preventDefault();
+        handleLaunchGame();
+      }
+    }
+  });
+}
+
+function cleanupTimers() {
+  if (state.statusTimer) {
+    clearInterval(state.statusTimer);
+    state.statusTimer = null;
+  }
+  if (state.packPollTimer) {
+    clearInterval(state.packPollTimer);
+    state.packPollTimer = null;
+  }
+  if (state.progressCloseTimer) {
+    clearTimeout(state.progressCloseTimer);
+    state.progressCloseTimer = null;
+  }
+  if (pdsState.note.timer) {
+    clearTimeout(pdsState.note.timer);
+    pdsState.note.timer = null;
+  }
+}
+
+// ================== OLAY BAĞLAMA ==================
 function setupEventListeners() {
   // Sekme Değişimi
   document.querySelectorAll(".nav-tab").forEach(tab => {
@@ -459,7 +653,7 @@ function setupEventListeners() {
     optToggle.addEventListener("change", (e) => {
       state.cookieOptimize = e.target.checked;
       localStorage.setItem("cl_optimize", state.cookieOptimize);
-      showToast(state.cookieOptimize ? "⚡ Optimize motoru devrede!" : "Vanilla moduna geçildi.", "info");
+      showToast(state.cookieOptimize ? " Optimize motoru devrede!" : "Vanilla moduna geçildi.", "info");
     });
   }
 
@@ -570,7 +764,7 @@ function setupEventListeners() {
     btnOpenScreenshots.addEventListener("click", () => openSystemFolder("screenshots"));
   }
 
-  // Konsol Temizle
+  // Konsol araçları
   const btnClearConsole = document.getElementById("btnClearConsole");
   if (btnClearConsole) {
     btnClearConsole.addEventListener("click", () => {
@@ -578,6 +772,60 @@ function setupEventListeners() {
       if (cOut) cOut.textContent = "Konsol temizlendi.\n";
     });
   }
+  const btnCopyConsole = document.getElementById("btnCopyConsole");
+  if (btnCopyConsole) btnCopyConsole.addEventListener("click", copyConsoleOutput);
+  const btnExportConsole = document.getElementById("btnExportConsole");
+  if (btnExportConsole) btnExportConsole.addEventListener("click", exportConsoleOutput);
+
+  // Galeri lightbox
+  const lightboxClose = document.getElementById("galleryLightboxClose");
+  if (lightboxClose) lightboxClose.addEventListener("click", closeGalleryLightbox);
+  const galleryLightbox = document.getElementById("galleryLightbox");
+  if (galleryLightbox) {
+    galleryLightbox.addEventListener("click", (e) => {
+      if (e.target === galleryLightbox) closeGalleryLightbox();
+    });
+  }
+
+  // Kısayollar
+  const btnShortcuts = document.getElementById("btnShowShortcuts");
+  if (btnShortcuts) btnShortcuts.addEventListener("click", openShortcutsModal);
+  const btnCloseShortcuts = document.getElementById("btnCloseShortcuts");
+  if (btnCloseShortcuts) btnCloseShortcuts.addEventListener("click", closeShortcutsModal);
+  const btnCloseShortcutsFooter = document.getElementById("btnCloseShortcutsFooter");
+  if (btnCloseShortcutsFooter) btnCloseShortcutsFooter.addEventListener("click", closeShortcutsModal);
+
+  // Profil arama / sıralama
+  const instanceSearch = document.getElementById("instanceSearchInput");
+  if (instanceSearch) {
+    instanceSearch.value = state.instanceQuery;
+    instanceSearch.addEventListener("input", (e) => {
+      state.instanceQuery = e.target.value;
+      renderInstances();
+    });
+  }
+  const instanceSort = document.getElementById("instanceSortSelect");
+  if (instanceSort) {
+    instanceSort.value = state.instanceSort;
+    instanceSort.addEventListener("change", (e) => {
+      state.instanceSort = e.target.value;
+      localStorage.setItem("cl_instance_sort", state.instanceSort);
+      renderInstances();
+    });
+  }
+
+  // Son dünyalar / hızlı eylemler
+  const btnRefreshWorlds = document.getElementById("btnRefreshWorlds");
+  if (btnRefreshWorlds) btnRefreshWorlds.addEventListener("click", loadRecentWorlds);
+  const btnOpenModsFolder = document.getElementById("btnOpenModsFolder");
+  if (btnOpenModsFolder) btnOpenModsFolder.addEventListener("click", () => openActiveInstanceFolder("mods"));
+  const btnOpenInstanceFolder = document.getElementById("btnOpenInstanceFolder");
+  if (btnOpenInstanceFolder) btnOpenInstanceFolder.addEventListener("click", () => openActiveInstanceFolder(""));
+  const btnOpenInstanceScreenshots = document.getElementById("btnOpenInstanceScreenshots");
+  if (btnOpenInstanceScreenshots) btnOpenInstanceScreenshots.addEventListener("click", () => openActiveInstanceFolder("screenshots"));
+
+  setupGlobalShortcuts();
+  window.addEventListener("beforeunload", cleanupTimers);
 
   // Sürüm Değiştir overlay'i
   initVersionSwitchModal();
@@ -622,7 +870,8 @@ function initDialogA11y() {
     confirmModal: () => { const b = document.getElementById("btnConfirmCancel"); if (b) b.click(); },
     versionSwitchModal: () => closeVersionSwitchOverlay(),
     versionSelectorModal: () => closeVersionSelectorModal(),
-    launchProgressModal: () => closeProgressModal()
+    launchProgressModal: () => closeProgressModal(),
+    shortcutsModal: () => closeShortcutsModal()
   };
 
   const visibleModal = () => {
@@ -639,8 +888,17 @@ function initDialogA11y() {
     const modal = visibleModal();
 
     if (e.key === "Escape") {
+      const gallery = document.getElementById("galleryLightbox");
+      if (gallery && gallery.classList.contains("show")) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        closeGalleryLightbox();
+        return;
+      }
       if (modal && closers[modal.id]) {
         e.preventDefault();
+        // Alttaki profil detay ekranının da ESC almasını engelle.
+        e.stopImmediatePropagation();
         closers[modal.id]();
       }
       return;
@@ -690,7 +948,9 @@ function switchTab(tabId) {
   if (targetTab) targetTab.classList.add("active");
   if (targetPane) targetPane.classList.add("active");
 
-  if (tabId === "tab-modrinth") {
+  if (tabId === "tab-play") {
+    loadRecentWorlds();
+  } else if (tabId === "tab-modrinth") {
     renderModrinthTargetBar();
     if (state.modrinthHits.length === 0) {
       fetchModrinth(true);
@@ -720,7 +980,12 @@ function getModrinthTarget() {
 
 async function loadInstances() {
   const data = await apiGet("/api/instances", 8000);
-  state.instances = (data && Array.isArray(data.instances)) ? data.instances : [];
+  const listOk = !!(data && Array.isArray(data.instances));
+
+  // Geçici bir ağ hatası, mevcut profil listesini ve aktif seçimi SİLMEMELİ.
+  if (!listOk) return false;
+
+  state.instances = data.instances;
 
   if (state.activeInstanceId && !getInstanceById(state.activeInstanceId)) {
     state.activeInstanceId = "";
@@ -737,18 +1002,21 @@ async function loadInstances() {
   applyActiveInstanceToUI();
   ensurePackPolling();
   refreshInstalledContent();
+  return true;
 }
 
 function ensurePackPolling() {
   const hasInstalling = state.instances.some(i => i.install_status === "installing");
   if (hasInstalling && !state.packPollTimer) {
     state.packPollTimer = setInterval(async () => {
-      await loadInstances();
+      const ok = await loadInstances();
+      // Başarısız bir yoklama "kurulum bitti" sayılmamalı.
+      if (!ok) return;
       if (!state.instances.some(i => i.install_status === "installing")) {
         clearInterval(state.packPollTimer);
         state.packPollTimer = null;
         refreshInstalledContent();
-        showToast("📦 Modpack kurulumu tamamlandı!", "success");
+        showToast("Modpack kurulumu tamamlandı.", "success");
       }
     }, 3000);
   }
@@ -800,10 +1068,10 @@ function renderInstances() {
     const empty = document.createElement("div");
     empty.className = "empty-state";
     empty.innerHTML = `
-      <div class="empty-state-icon" aria-hidden="true">🗂️</div>
+      <div class="empty-state-icon" aria-hidden="true">+</div>
       <h3 class="empty-state-title">Henüz profil oluşturulmamış</h3>
       <p class="empty-state-desc">Modların nereye kurulacağını belirlemek için ilk profilinizi oluşturun.</p>
-      <button class="btn btn-primary" id="btnEmptyCreateInstance">➕ Yeni Profil Oluştur</button>
+      <button class="btn btn-primary" id="btnEmptyCreateInstance"> Yeni Profil Oluştur</button>
     `;
     wrap.appendChild(empty);
     const btn = document.getElementById("btnEmptyCreateInstance");
@@ -811,7 +1079,31 @@ function renderInstances() {
     return;
   }
 
-  state.instances.forEach((inst, idx) => {
+  const query = String(state.instanceQuery || "").trim().toLowerCase();
+  const list = state.instances.filter(inst =>
+    !query ||
+    String(inst.name || "").toLowerCase().includes(query) ||
+    String(inst.version || "").toLowerCase().includes(query) ||
+    String(inst.loader || "").toLowerCase().includes(query)
+  );
+  const sort = state.instanceSort || "created";
+  list.sort((a, b) => {
+    if (sort === "name") return String(a.name || "").localeCompare(String(b.name || ""), "tr");
+    if (sort === "mods") return (Number(b.mod_count) || 0) - (Number(a.mod_count) || 0);
+    if (sort === "played") return getLastPlayed(b.id) - getLastPlayed(a.id);
+    return String(a.created_at || "").localeCompare(String(b.created_at || ""));
+  });
+
+  if (list.length === 0) {
+    wrap.innerHTML = `<div class="empty-state">
+      <div class="empty-state-icon" aria-hidden="true">?</div>
+      <h3 class="empty-state-title">Eşleşen profil yok</h3>
+      <p class="empty-state-desc">"${escapeHtml(state.instanceQuery)}" aramasına uygun profil bulunamadı.</p>
+    </div>`;
+    return;
+  }
+
+  list.forEach((inst, idx) => {
     const isActive = inst.id === state.activeInstanceId;
     const installing = inst.install_status === "installing";
     const failed = inst.install_status === "failed";
@@ -838,10 +1130,10 @@ function renderInstances() {
     }
 
     const metaText = installing
-      ? `⏳ ${escapeHtml(inst.install_detail || "Kuruluyor...")} %${inst.install_progress || 0}`
+      ? `Kuruluyor: ${escapeHtml(inst.install_detail || "")} %${inst.install_progress || 0}`
       : failed
-        ? `⚠️ Kurulum hatası: ${escapeHtml(inst.install_detail || "")}`
-        : `MC ${escapeHtml(inst.version)} • ${escapeHtml(inst.loader)} • ${inst.mod_count || 0} mod`;
+        ? `Kurulum hatası: ${escapeHtml(inst.install_detail || "")}`
+        : `Son oynama: ${formatPlayed(getLastPlayed(inst.id))}`;
 
     const top = document.createElement("div");
     top.className = "inst-card-top";
@@ -849,17 +1141,15 @@ function renderInstances() {
 
     const info = document.createElement("div");
     info.className = "inst-info";
-    const LOADER_ICONS = { fabric: "⚡", forge: "🔨", neoforge: "🦊", quilt: "🧵", vanilla: "🧱" };
     const loaderKey = String(inst.loader || "vanilla").toLowerCase();
-    const showStatus = installing || failed;
     info.innerHTML = `
       <h4 class="inst-name" title="${escapeHtml(inst.name)}">${escapeHtml(inst.name)}</h4>
       <div class="inst-chips">
-        <span class="inst-chip">📦 ${escapeHtml(inst.version || "?")}</span>
-        <span class="inst-chip" title="Mod yükleyici">${LOADER_ICONS[loaderKey] || "📦"} ${escapeHtml(loaderKey)}</span>
-        <span class="inst-chip" title="Yüklü mod sayısı">🧩 ${inst.mod_count || 0}</span>
+        <span class="inst-chip">MC ${escapeHtml(inst.version || "?")}</span>
+        <span class="inst-chip" title="Mod yükleyici">${escapeHtml(loaderKey)}</span>
+        <span class="inst-chip" title="Yüklü mod sayısı">${Number(inst.mod_count) || 0} mod</span>
       </div>
-      ${showStatus ? `<span class="inst-meta">${metaText}</span>` : ""}
+      <span class="inst-meta">${metaText}</span>
     `;
     top.appendChild(info);
 
@@ -875,13 +1165,13 @@ function renderInstances() {
 
     const btnActivate = document.createElement("button");
     btnActivate.className = "btn-inst btn-inst-primary";
-    btnActivate.textContent = isActive ? "✓ Seçili" : "Aktif Yap";
+    btnActivate.textContent = isActive ? "Seçili" : "Aktif yap";
     btnActivate.disabled = installing;
     btnActivate.addEventListener("click", () => setActiveInstance(inst.id));
 
     const btnMods = document.createElement("button");
     btnMods.className = "btn-inst";
-    btnMods.textContent = "📋 Detaylar";
+    btnMods.textContent = "Detaylar";
     btnMods.addEventListener("click", () => openProfileDetail(inst.id, "mods"));
 
     const btnDelete = document.createElement("button");
@@ -919,13 +1209,14 @@ function setActiveInstance(id) {
   applyActiveInstanceToUI();
   renderInstances();
   renderModrinthTargetBar();
+  loadRecentWorlds();
   fetchModrinth(true);
 
   const inst = getActiveInstance();
   if (inst) {
     const versionInput = document.getElementById("versionInput");
     if (versionInput) versionInput.value = inst.version;
-    showToast(`🗂️ Aktif profil: ${inst.name} (MC ${inst.version} • ${inst.loader})`, "info");
+    showToast(`Aktif profil: ${inst.name} (MC ${inst.version} • ${inst.loader})`, "info");
   }
 }
 
@@ -953,7 +1244,10 @@ function applyActiveInstanceToUI() {
     if (vInput) vInput.value = inst.version;
     if (hint) hint.textContent = `"${inst.name}" profiline bağlı — değişiklik profile kaydedilir`;
 
-    const radio = document.querySelector(`input[name="loaderRadio"][value="${inst.loader}"]`);
+    const safeLoader = ["vanilla", "fabric", "forge", "neoforge", "quilt"].includes(String(inst.loader).toLowerCase())
+      ? String(inst.loader).toLowerCase()
+      : "fabric";
+    const radio = document.querySelector(`input[name="loaderRadio"][value="${safeLoader}"]`);
     if (radio) {
       radio.checked = true;
       document.querySelectorAll('input[name="loaderRadio"]').forEach(r => {
@@ -986,10 +1280,10 @@ function renderPlayHero() {
     if (nameEl) nameEl.textContent = "Profil seçilmedi";
     if (chipsEl) chipsEl.innerHTML = "";
     if (subEl) subEl.textContent = "Başlamak için yeni bir profil oluşturun.";
-    if (iconEl) { iconEl.textContent = "🗂️"; }
+    if (iconEl) { iconEl.textContent = "?"; }
     if (detailsBtn) detailsBtn.disabled = true;
     if (railCard) railCard.classList.add("is-empty");
-    if (railIcon) railIcon.textContent = "🗂️";
+    if (railIcon) railIcon.textContent = "?";
     if (railName) railName.textContent = "Profil yok";
     if (railMeta) railMeta.textContent = "MC • —";
     return;
@@ -1006,7 +1300,8 @@ function renderPlayHero() {
     chipsEl.innerHTML = `
       <span class="chip">MC ${escapeHtml(inst.version || "?")}</span>
       <span class="chip">${escapeHtml(loaderText)}</span>
-      <span class="chip">🧩 ${inst.mod_count || 0} mod</span>
+      <span class="chip">${Number(inst.mod_count) || 0} mod</span>
+      <span class="chip">${formatPlayed(getLastPlayed(inst.id))}</span>
     `;
   }
 
@@ -1053,6 +1348,109 @@ function renderPlayHero() {
       railIcon.textContent = (inst.name || "?").trim().charAt(0).toUpperCase() || "?";
     }
   }
+}
+
+// ================== SON DÜNYALAR / HIZLI EYLEMLER ==================
+async function loadRecentWorlds() {
+  const list = document.getElementById("recentWorldsList");
+  const sub = document.getElementById("recentWorldsSub");
+  if (!list) return;
+
+  const inst = getActiveInstance();
+  if (!inst) {
+    list.innerHTML = `<div class="recent-empty">Profil seçilmedi. Bir profil oluşturduğunuzda son dünyalar burada görünür.</div>`;
+    if (sub) sub.textContent = "Profil seçilmedi";
+    return;
+  }
+
+  const instanceId = String(inst.id || "");
+  if (sub) sub.textContent = `${inst.name || "Profil"} • MC ${inst.version || "?"}`;
+  list.innerHTML = `<div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>`;
+
+  const data = await apiGet(`/api/instances/worlds?instance=${encodeURIComponent(instanceId)}`, 15000);
+  if (String((getActiveInstance() || {}).id || "") !== instanceId) return;
+
+  const worlds = (data && Array.isArray(data.worlds)) ? data.worlds.slice() : [];
+  worlds.sort((a, b) => String(b.last_played || "").localeCompare(String(a.last_played || "")));
+  const recent = worlds.slice(0, 5);
+
+  if (!data || data.success !== true) {
+    list.innerHTML = `<div class="recent-empty">Dünya listesi alınamadı. Core bağlantısını kontrol edin.</div>`;
+    return;
+  }
+  if (recent.length === 0) {
+    list.innerHTML = `<div class="recent-empty">Bu profilde henüz kayıtlı dünya yok. Oyunda yeni bir dünya oluşturun.</div>`;
+    return;
+  }
+
+  list.innerHTML = "";
+  recent.forEach(world => {
+    const row = document.createElement("div");
+    row.className = "recent-row";
+
+    const icon = document.createElement("div");
+    icon.className = "recent-icon";
+    icon.textContent = "W";
+    if (world.has_icon) {
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.alt = "";
+      img.src = `${API_BASE}/api/instances/world/icon?instance=${encodeURIComponent(instanceId)}` +
+        `&world=${encodeURIComponent(world.name)}&t=${encodeURIComponent(world.last_played || "")}`;
+      img.addEventListener("error", () => { img.remove(); icon.textContent = "W"; });
+      icon.textContent = "W";
+      icon.appendChild(img);
+    }
+
+    const info = document.createElement("div");
+    info.className = "recent-info";
+    info.innerHTML = `
+      <div class="recent-name">${escapeHtml(world.name)}</div>
+      <div class="recent-meta">${escapeHtml(world.last_played || "—")} • ${Number(world.size_mb) || 0} MB</div>
+    `;
+
+    const actions = document.createElement("div");
+    actions.className = "recent-actions";
+    const folderBtn = document.createElement("button");
+    folderBtn.type = "button";
+    folderBtn.className = "recent-action";
+    folderBtn.textContent = "Klasör";
+    folderBtn.addEventListener("click", () => openSystemFolder(`instances/${instanceId}/saves`));
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "recent-action";
+    copyBtn.textContent = "Kopyala";
+    copyBtn.addEventListener("click", async () => {
+      copyBtn.disabled = true;
+      const result = await apiPost("/api/instances/world/copy", {
+        instance: instanceId,
+        world: world.name
+      }, 120000);
+      copyBtn.disabled = false;
+      if (result && result.success) {
+        showToast(result.message || "Dünya kopyalandı.", "success");
+        loadRecentWorlds();
+      } else {
+        showToast((result && result.error) || "Dünya kopyalanamadı.", "error");
+      }
+    });
+    actions.appendChild(folderBtn);
+    actions.appendChild(copyBtn);
+
+    row.appendChild(icon);
+    row.appendChild(info);
+    row.appendChild(actions);
+    list.appendChild(row);
+  });
+}
+
+function openActiveInstanceFolder(subdir) {
+  const inst = getActiveInstance();
+  if (!inst) {
+    showToast("Önce bir profil seçin.", "info");
+    return;
+  }
+  openSystemFolder(`instances/${inst.id}/${subdir}`);
 }
 
 async function updateActiveInstance(fields) {
@@ -1172,10 +1570,13 @@ function initNewProfileModal() {
   const picker = document.getElementById("npVersionPicker");
   if (picker) picker.addEventListener("click", () => openVersionSelectorModal());
 
-  document.addEventListener("click", (e) => {
-    const combo = document.getElementById("npVersionCombo");
-    if (combo && !combo.contains(e.target)) npCloseVersionList();
-  });
+  // Eski sürüm kombosu kaldırıldı; yalnızca hâlâ varsa dinleyici ekle.
+  if (document.getElementById("npVersionCombo")) {
+    document.addEventListener("click", (e) => {
+      const combo = document.getElementById("npVersionCombo");
+      if (combo && !combo.contains(e.target)) npCloseVersionList();
+    });
+  }
 
   document.querySelectorAll("#npLoaderGrid .np-loader-card").forEach((card) => {
     card.addEventListener("click", () => npSelectLoader(card.getAttribute("data-loader")));
@@ -1232,8 +1633,8 @@ function npSelectTab(tab) {
   const tip = document.getElementById("npModalTip");
   if (tip) {
     tip.textContent = npState.tab === "custom"
-      ? "💡 Profil oluşturulunca otomatik olarak aktif edilir."
-      : "💡 Mod paketi kendi Minecraft sürümü ve yükleyicisiyle ayrı bir profil olarak kurulur.";
+      ? " Profil oluşturulunca otomatik olarak aktif edilir."
+      : " Mod paketi kendi Minecraft sürümü ve yükleyicisiyle ayrı bir profil olarak kurulur.";
   }
   if (npState.tab === "packs" && npState.packHits.length === 0 && !npState.packBusy) {
     npRenderPackVersionFilter();
@@ -1273,7 +1674,7 @@ function npRenderVersionList(query, open) {
       item.setAttribute("data-version", v.id);
       item.setAttribute("role", "option");
       item.innerHTML =
-        `<span class="np-combo-id">${v.is_optimized ? '<span class="np-combo-opt" aria-hidden="true">⚡</span>' : ""}${escapeHtml(v.id)}</span>` +
+        `<span class="np-combo-id">${v.is_optimized ? '<span class="np-combo-opt" aria-hidden="true"></span>' : ""}${escapeHtml(v.id)}</span>` +
         `<span class="np-combo-type">${escapeHtml(v.type || "")}</span>`;
       item.addEventListener("click", () => npPickVersion(v.id, v));
       item.addEventListener("keydown", (e) => {
@@ -1425,7 +1826,7 @@ function npUpdateLoaderBox() {
   // Durust bilgilendirme: yukleyici bu MC surumunu farkli adlandirabilir ve
   // bazi yeni surumler icin henuz kararli yapi olmayabilir.
   const aliasNote = info.mc_alias ? ` Yükleyici bu sürümü "${info.mc_alias}" olarak adlandırır.` : "";
-  const betaNote = /beta|alpha|rc/i.test(rec) ? " ⚠️ Bu Minecraft sürümü için kararlı yapı yok, en yeni ön sürüm öneriliyor." : "";
+  const betaNote = /beta|alpha|rc/i.test(rec) ? "  Bu Minecraft sürümü için kararlı yapı yok, en yeni ön sürüm öneriliyor." : "";
   if (npState.manualLoaderVersion) {
     valueEl.innerHTML = `<span class="np-lv-manual">${escapeHtml(npState.manualLoaderVersion)}</span> <span class="np-lv-tag">elle seçildi</span>`;
     npText(reasonEl, `Otomatik öneri: ${rec || "—"} • Gelişmiş menüden değiştirildi.`);
@@ -1486,9 +1887,11 @@ async function confirmCreateInstance() {
   }
   const info = npState.loaderInfo;
   if (loader !== "vanilla" && info && info.supported === false) {
-    showToast(`⚠️ ${loader} ${version} için desteklenmiyor. Farklı sürüm/yükleyici seçin.`, "error");
+    showToast(`${loader} ${version} için desteklenmiyor. Farklı sürüm/yükleyici seçin.`, "error");
     return;
   }
+  if (state.creatingInstance) return;
+  state.creatingInstance = true;
 
   const confirmBtn = document.getElementById("btnConfirmCreateInstance");
   if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = "Oluşturuluyor..."; }
@@ -1499,7 +1902,8 @@ async function confirmCreateInstance() {
     15000
   );
 
-  if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = "Oluştur ve Aktif Yap"; }
+  state.creatingInstance = false;
+  if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = "Oluştur ve aktif yap"; }
 
   if (data && data.success && data.instance) {
     closeCreateInstanceModal();
@@ -1508,10 +1912,10 @@ async function confirmCreateInstance() {
     await loadInstances();
     setActiveInstance(data.instance.id);
     const lvText = loader === "vanilla" ? "" : (loaderVersion ? ` • ${loaderVersion}` : " • oto loader");
-    showToast(`✓ "${data.instance.name}" oluşturuldu (${loader}${lvText}).`, "success");
+    showToast(`"${data.instance.name}" oluşturuldu (${loader}${lvText}).`, "success");
     fetchModrinth(true);
   } else {
-    showToast(`⚠️ ${(data && data.error) || "Profil oluşturulamadı."}`, "error");
+    showToast(`${(data && data.error) || "Profil oluşturulamadı."}`, "error");
   }
 }
 
@@ -1532,7 +1936,8 @@ function npRenderPackVersionFilter() {
 }
 
 async function npSearchPacks() {
-  if (npState.packBusy) return;
+  // Yeni arama eskisini geçersiz kılar; eski yanıt geldiğinde yok sayılır.
+  const reqId = ++npState.packRequestId;
   npState.packBusy = true;
   const list = document.getElementById("npPackList");
   if (list) {
@@ -1552,6 +1957,7 @@ async function npSearchPacks() {
     offset: 0,
   });
   const data = await apiGet(`/api/modrinth/search?${params.toString()}`, 20000);
+  if (reqId !== npState.packRequestId) return;
   npState.packBusy = false;
 
   if (data && data.error) {
@@ -1560,7 +1966,7 @@ async function npSearchPacks() {
     if (listEl) {
       listEl.innerHTML = `
         <div class="np-pack-loading">
-          <span class="np-net-error">⚠️ ${escapeHtml(data.error)}</span>
+          <span class="np-net-error"> ${escapeHtml(data.error)}</span>
           <span class="np-net-hint">Ağ testi için: <code>http://127.0.0.1:18420/api/net-test</code></span>
         </div>`;
     }
@@ -1580,7 +1986,7 @@ function showNetErrorOnce(message) {
   const key = String(message || "").slice(0, 120);
   if (state.lastNetErrorShown === key) return;
   state.lastNetErrorShown = key;
-  showToast("⚠️ Bağlantı hatası: " + message, "error");
+  showToast(" Bağlantı hatası: " + message, "error");
 }
 
 function npRenderPackList() {
@@ -1597,13 +2003,14 @@ function npRenderPackList() {
     item.className = "np-pack-item" + (npState.selectedPack && npState.selectedPack.slug === hit.slug ? " active" : "");
     item.style.animationDelay = Math.min(i * 35, 420) + "ms";
     item.innerHTML = `
-      <img class="np-pack-icon" src="${escapeHtml(hit.icon_url || "")}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+      <img class="np-pack-icon" src="${escapeHtml(hit.icon_url || "")}" alt="" loading="lazy">
       <span class="np-pack-text">
         <strong>${escapeHtml(hit.title || hit.slug)}</strong>
-        <small>${escapeHtml(hit.description || "")}</small>
-        <span class="np-pack-meta">↓ ${npFmtNum(hit.downloads)}${hit.categories && hit.categories.length ? " • " + escapeHtml(hit.categories.slice(0, 3).join(", ")) : ""}</span>
+        <span class="np-pack-meta">${npFmtNum(hit.downloads)} indirme${hit.categories && hit.categories.length ? " • " + escapeHtml(hit.categories.slice(0, 2).join(", ")) : ""}</span>
       </span>
       <span class="np-pack-arrow" aria-hidden="true">→</span>`;
+    const packImg = item.querySelector(".np-pack-icon");
+    if (packImg) packImg.addEventListener("error", () => packImg.remove());
     item.addEventListener("click", () => npSelectPack(hit));
     list.appendChild(item);
   });
@@ -1615,20 +2022,20 @@ function npRenderPackDetail(hit) {
   if (!hit) {
     box.innerHTML = `
       <div class="np-pack-empty">
-        <span class="np-pack-empty-icon" aria-hidden="true">📦</span>
+        <span class="np-pack-empty-icon" aria-hidden="true"></span>
         <span>Detayları görmek için soldan bir mod paketi seçin.</span>
       </div>`;
     return;
   }
   box.innerHTML = `
     <div class="np-pack-det-head">
-      <img class="np-pack-det-icon" src="${escapeHtml(hit.icon_url || "")}" alt="" onerror="this.style.visibility='hidden'">
+      <img class="np-pack-det-icon" src="${escapeHtml(hit.icon_url || "")}" alt="">
       <div class="np-pack-det-title">
         <h4>${escapeHtml(hit.title || hit.slug)}</h4>
         <p class="np-pack-det-author">${escapeHtml(hit.author || "Modrinth")}</p>
         <div class="np-pack-det-badges">
-          <span class="np-chip">↓ ${npFmtNum(hit.downloads)}</span>
-          <span class="np-chip">♥ ${npFmtNum(hit.follows)}</span>
+          <span class="np-chip">${npFmtNum(hit.downloads)} indirme</span>
+          <span class="np-chip">${npFmtNum(hit.follows)} takipçi</span>
           <span class="np-chip" id="npPackDetLoaders">—</span>
         </div>
       </div>
@@ -1640,6 +2047,8 @@ function npRenderPackDetail(hit) {
     <div class="np-pack-det-hint">
       Bu paket kendi Minecraft sürümü ve yükleyicisiyle <strong>yeni bir profil</strong> olarak kurulur.
     </div>`;
+  const detImg = box.querySelector(".np-pack-det-icon");
+  if (detImg) detImg.addEventListener("error", () => detImg.remove());
 }
 
 async function npSelectPack(hit) {
@@ -1659,8 +2068,9 @@ async function npSelectPack(hit) {
   const data = await apiGet(`/api/modrinth/pack/versions?slug=${encodeURIComponent(hit.slug)}`, 20000);
   if (!npState.selectedPack || npState.selectedPack.slug !== hit.slug) return;
 
-  const gameVersions = (data && data.game_versions) || [];
-  const loaders = (data && data.loaders) || [];
+  const packOk = !!(data && data.success && Array.isArray(data.game_versions) && data.game_versions.length > 0);
+  const gameVersions = packOk ? data.game_versions : [];
+  const loaders = packOk && Array.isArray(data.loaders) ? data.loaders : [];
   const target = getModrinthTarget();
   const preferred = (target && target.version) || state.selectedVersion || "";
 
@@ -1683,7 +2093,10 @@ async function npSelectPack(hit) {
       if (preferred && gameVersions.indexOf(preferred) !== -1) gvSel.value = preferred;
     }
   }
-  if (installBtn) installBtn.disabled = false;
+  if (installBtn) {
+    installBtn.disabled = !packOk;
+    if (!packOk) showToast((data && data.error) || "Bu paket için uyumlu sürüm bulunamadı.", "error");
+  }
 }
 
 async function npInstallSelectedPack() {
@@ -1692,24 +2105,24 @@ async function npInstallSelectedPack() {
   const gvSel = document.getElementById("npPackGameVersionSelect");
   const gameVersion = (gvSel && gvSel.value) || "";
   const btn = document.getElementById("npPackInstallBtn");
-  if (btn) { btn.disabled = true; btn.textContent = "📦 Profil oluşturuluyor..."; }
-  showToast(`📦 ${hit.title || hit.slug} yeni profil olarak ekleniyor...`, "info");
+  if (btn) { btn.disabled = true; btn.textContent = " Profil oluşturuluyor..."; }
+  showToast(` ${hit.title || hit.slug} yeni profil olarak ekleniyor...`, "info");
 
   const data = await apiPost("/api/modrinth/modpack/install", {
     slug: hit.slug,
     game_version: gameVersion,
   }, 60000);
 
-  if (btn) { btn.disabled = false; btn.textContent = "📦 Profil Olarak Kur"; }
+  if (btn) { btn.disabled = false; btn.textContent = "Profil olarak kur"; }
 
   if (data && data.success && data.instance) {
     closeCreateInstanceModal();
     await loadInstances();
     ensurePackPolling();
     switchTab("tab-instances");
-    showToast(`✓ "${data.instance.name}" profili oluşturuldu, kurulum arka planda sürüyor.`, "success");
+    showToast(` "${data.instance.name}" profili oluşturuldu, kurulum arka planda sürüyor.`, "success");
   } else {
-    showToast(`⚠️ ${(data && data.error) || "Modpack profili oluşturulamadı."}`, "error");
+    showToast(` ${(data && data.error) || "Modpack profili oluşturulamadı."}`, "error");
   }
 }
 
@@ -1733,9 +2146,9 @@ async function deleteInstance(id, name) {
       localStorage.removeItem("cl_modrinth_target");
     }
     await loadInstances();
-    showToast(`🗑️ "${name}" profili silindi.`, "info");
+    showToast(` "${name}" profili silindi.`, "info");
   } else {
-    showToast(`⚠️ ${(data && data.error) || "Profil silinemedi."}`, "error");
+    showToast(` ${(data && data.error) || "Profil silinemedi."}`, "error");
   }
 }
 
@@ -1753,7 +2166,11 @@ function renderModrinthTargetBar() {
     opt.textContent = "Profil oluşturulmamış — önce yeni profil ekleyin";
     select.appendChild(opt);
     select.disabled = true;
-    if (loaderSelect) loaderSelect.disabled = false;
+    if (loaderSelect) {
+      loaderSelect.disabled = false;
+      const group = loaderSelect.closest(".m-filter-group");
+      if (group) group.hidden = false;
+    }
     if (hint) hint.textContent = "İçerik kurmak için önce bir profil oluşturun; modlar/shaderlar/doku paketleri o profilin klasörüne kurulur.";
     return;
   }
@@ -1772,12 +2189,16 @@ function renderModrinthTargetBar() {
   const effective = target || state.instances[0];
 
   if (loaderSelect) {
+    // Profil hedefi seçiliyken yükleyici profilden gelir; kullanıcıya
+    // değiştirilemez bir filtre göstermek yerine gizle.
     loaderSelect.disabled = true;
     loaderSelect.value = ["fabric", "forge"].includes(effective.loader) ? effective.loader : "Tümü";
+    const group = loaderSelect.closest(".m-filter-group");
+    if (group) group.hidden = true;
   }
 
   if (hint) {
-    const vanillaWarning = (effective.loader === "vanilla" && state.modrinthType === "mod") ? " ⚠️ Vanilla profillere mod kurulmaz." : "";
+    const vanillaWarning = (effective.loader === "vanilla" && state.modrinthType === "mod") ? " • Vanilla profillere mod kurulmaz." : "";
     hint.textContent = `"${effective.name}" profiline kurulacak • MC ${effective.version} • ${effective.loader} • ${effective.mod_count || 0} mevcut mod${vanillaWarning}`;
   }
 }
@@ -1788,7 +2209,7 @@ async function loadVersions() {
 
   if (data && data.error && !state.lastVersionErrorShown) {
     state.lastVersionErrorShown = true;
-    showToast("⚠️ " + data.error, "error");
+    showToast(" " + data.error, "error");
   }
   if (data && Array.isArray(data.versions) && data.versions.length > 0) {
     state.versions = data.versions;
@@ -1907,12 +2328,12 @@ function filterAndRenderVersionTable() {
       <span class="vcard-accent" aria-hidden="true"></span>
       <span class="vcard-main">
         <span class="vcard-name">${escapeHtml(v.id)}</span>
-        ${v.is_optimized ? '<span class="vcard-badge badge-opt" title="Cookie Launcher optimize profili hazır">⚡ Optimize</span>' : ""}
+        ${v.is_optimized ? '<span class="vcard-badge badge-opt" title="Cookie Launcher optimize profili hazır"> Optimize</span>' : ""}
         <span class="vcard-badge badge-${escapeHtml(v.type)}">${VERSION_TYPE_LABELS[v.type] || escapeHtml(v.type)}</span>
-        ${isSelected ? '<span class="vcard-badge badge-current">✓ Seçili</span>' : ""}
+        ${isSelected ? '<span class="vcard-badge badge-current">Seçili</span>' : ""}
       </span>
       <span class="vcard-side">
-        ${v.is_installed ? '<span class="vcard-installed">✓ Yüklü</span>' : ""}
+        ${v.is_installed ? '<span class="vcard-installed">Yüklü</span>' : ""}
         <span class="vcard-date">${formatVersionDate(v.releaseTime)}</span>
       </span>`;
     card.addEventListener("click", () => selectVersion(v.id));
@@ -1929,7 +2350,7 @@ function setLaunchButton(mode) {
       idle: "OYUNU BAŞLAT",
       busy: "BAŞLATILIYOR...",
       installing: "YÜKLENİYOR...",
-      running: "🎮 OYUN ÇALIŞIYOR",
+      running: " OYUN ÇALIŞIYOR",
       noProfile: "ÖNCE PROFİL OLUŞTUR"
     };
     btnText.textContent = labels[mode] || labels.idle;
@@ -1958,18 +2379,23 @@ function ensureProgressModal() {
   state.progressOpen = true;
 }
 
-function closeProgressModal() {
+function closeProgressModal(auto = false) {
+  if (state.progressCloseTimer) {
+    clearTimeout(state.progressCloseTimer);
+    state.progressCloseTimer = null;
+  }
   const modal = document.getElementById("launchProgressModal");
   if (modal) modal.style.display = "none";
   state.progressOpen = false;
-  state.progressDismissed = true;
+  // Otomatik kapanma, kullanıcının "arka planda devam et" tercihini ezmemeli.
+  if (!auto) state.progressDismissed = true;
 }
 
 function scheduleCloseProgressModal(delayMs) {
   if (state.progressCloseTimer) return;
   state.progressCloseTimer = setTimeout(() => {
-    closeProgressModal();
     state.progressCloseTimer = null;
+    closeProgressModal(true);
   }, delayMs);
 }
 
@@ -2058,15 +2484,17 @@ async function handleLaunchGame() {
   }
 
   if (accepted) {
+    state.launchAcceptedAt = Date.now();
+    setLastPlayed(activeInst.id);
     setProgressTexts("Başlatma isteği kabul edildi", "İndirme akışı arka planda sürüyor...", 0);
     return;
   }
 
   // İstek kabul edilmedi: modalı kapat, butonu eski haline getir, tek seferlik bilgi ver
   state.launchRequested = false;
-  closeProgressModal();
+  closeProgressModal(true);
   state.engineMode = "idle";
-  setLaunchButton("idle");
+  setLaunchButton(getActiveInstance() ? "idle" : "noProfile");
   showErrorOnce(backendError || "Core servisine ulaşılamadı. Arka plan servisini yeniden başlatın.");
 }
 
@@ -2078,51 +2506,65 @@ function startStatusPolling() {
 }
 
 async function pollStatus() {
+  // 700 ms'lik interval, 5 s'lik isteğin üstüne binmemeli.
+  if (state.pollInFlight) return;
+  state.pollInFlight = true;
   state.pollTick++;
 
-  const data = await apiGet("/api/status", 5000);
+  try {
+    const data = await apiGet("/api/status", 5000);
 
-  if (!data) {
-    state.coreFailCount++;
-    if (state.coreFailCount >= 3) {
-      const engineStatus = document.getElementById("engineStatusText");
-      if (engineStatus) engineStatus.textContent = "Core Bekleniyor...";
-      const statusWrap = document.getElementById("railCoreStatus");
-      if (statusWrap) statusWrap.dataset.state = "offline";
+    if (!data) {
+      state.coreFailCount++;
+      if (state.coreFailCount >= 3) {
+        const engineStatus = document.getElementById("engineStatusText");
+        if (engineStatus) engineStatus.textContent = "Core bekleniyor...";
+        const statusWrap = document.getElementById("railCoreStatus");
+        if (statusWrap) statusWrap.dataset.state = "offline";
+        const statusBar = document.getElementById("statusBar");
+        if (statusBar) statusBar.dataset.state = "offline";
+        const statusCore = document.getElementById("statusCoreText");
+        if (statusCore) statusCore.textContent = "Core bekleniyor";
+        const settingsCore = document.getElementById("settingsCoreText");
+        if (settingsCore) settingsCore.textContent = "Bekleniyor";
+      }
+      // Her ~7 saniyede bir portu yeniden keşfetmeyi dene
+      if (state.coreFailCount % 10 === 0) {
+        await detectApiBase();
+      }
+      return;
     }
-    // Her ~7 saniyede bir portu yeniden keşfetmeyi dene
-    if (state.coreFailCount % 10 === 0) {
-      await detectApiBase();
-    }
-    return;
-  }
 
-  state.coreFailCount = 0;
-  updateProgressUI(data);
+    state.coreFailCount = 0;
+    updateProgressUI(data);
 
-  // Konsol loglarını daha seyrek güncelle (gereksiz yükü önler)
-  if (state.pollTick % 3 === 0) {
-    const logData = await apiGet("/api/logs", 5000);
-    const cOut = document.getElementById("consoleOutput");
-    if (logData && Array.isArray(logData.logs) && cOut) {
-      cOut.textContent = logData.logs.join("\n");
-      cOut.scrollTop = cOut.scrollHeight;
+    // Konsol loglarını daha seyrek güncelle (gereksiz yükü önler)
+    if (state.pollTick % 3 === 0) {
+      const logData = await apiGet("/api/logs", 5000);
+      const cOut = document.getElementById("consoleOutput");
+      if (logData && Array.isArray(logData.logs) && cOut) {
+        cOut.textContent = logData.logs.join("\n");
+        if (isConsoleAutoscrollEnabled()) cOut.scrollTop = cOut.scrollHeight;
+      }
     }
+  } finally {
+    state.pollInFlight = false;
   }
 }
 
 function updateEngineStatus(installing, running) {
   const engineStatus = document.getElementById("engineStatusText");
   const statusWrap = document.getElementById("railCoreStatus");
-  if (statusWrap) statusWrap.dataset.state = running ? "running" : (installing ? "busy" : "ready");
-  if (!engineStatus) return;
-  if (running) {
-    engineStatus.textContent = "Oyun Çalışıyor";
-  } else if (installing) {
-    engineStatus.textContent = "Hazırlanıyor...";
-  } else {
-    engineStatus.textContent = "Core Hazır";
-  }
+  const mode = running ? "running" : (installing ? "busy" : "ready");
+  if (statusWrap) statusWrap.dataset.state = mode;
+  const statusBar = document.getElementById("statusBar");
+  if (statusBar) statusBar.dataset.state = mode;
+  const label = running ? "Oyun çalışıyor" : (installing ? "Hazırlanıyor" : "Core hazır");
+  if (engineStatus) engineStatus.textContent = label;
+  const statusCore = document.getElementById("statusCoreText");
+  if (statusCore) statusCore.textContent = label;
+  const settingsCore = document.getElementById("settingsCoreText");
+  if (settingsCore) settingsCore.textContent = running ? "Çalışıyor" : (installing ? "Meşgul" : "Hazır");
 }
 
 function updateProgressUI(data) {
@@ -2149,7 +2591,7 @@ function updateProgressUI(data) {
     if (!state.progressDismissed) {
       ensureProgressModal();
       setProgressBar(100);
-      setProgressTexts("✨ Oyun Başarıyla Açıldı!", "İyi oyunlar!", data.downloaded_mb);
+      setProgressTexts("Oyun başarıyla açıldı", "İyi oyunlar.", data.downloaded_mb);
       scheduleCloseProgressModal(1200);
     }
     state.launchRequested = false;
@@ -2159,17 +2601,22 @@ function updateProgressUI(data) {
   }
 
   // 3. Boşta
+  // Launch POST'undan hemen sonra gelen eski bir "idle" yanıtı, henüz
+  // başlamamış kurulumu iptal etmiş gibi göstermemeli.
+  if (state.launchRequested && (Date.now() - (state.launchAcceptedAt || 0)) < 2500) {
+    return;
+  }
   if (state.launchRequested) {
     state.launchRequested = false;
-    closeProgressModal();
+    closeProgressModal(true);
   }
   if (error) {
     showErrorOnce(error);
-    closeProgressModal();
+    closeProgressModal(true);
     apiPost("/api/clear-error", {}, 5000);
   }
   state.engineMode = "idle";
-  setLaunchButton("idle");
+  setLaunchButton(getActiveInstance() ? "idle" : "noProfile");
 }
 
 // ================== MODRINTH İÇERİK MERKEZİ ==================
@@ -2184,6 +2631,10 @@ function isContentInstalled(hit, category) {
   const cat = category || contentCategoryFromType(hit.project_type || state.modrinthType);
   const slug = String(hit.slug || "").toLowerCase();
   if (!slug) return false;
+
+  // Yüklü içerik verisi başka bir profile aitse "yüklü" damgası gösterme.
+  const currentTargetId = String((getModrinthTarget() || {}).id || "");
+  if (!currentTargetId || state.installedContentInstanceId !== currentTargetId) return false;
 
   const meta = state.installedContentMeta[cat] || {};
   if (meta[slug]) return true;
@@ -2209,16 +2660,19 @@ async function refreshInstalledContent() {
   state.installedContentMeta = { mod: {}, shader: {}, resourcepack: {} };
 
   const target = getModrinthTarget();
-  state.installedContentInstanceId = target ? String(target.id || "") : "";
+  const targetId = target ? String(target.id || "") : "";
+  state.installedContentInstanceId = "";
   state.installedLoading = !!target;
+  state.contentLoadFailed = false;
   renderInstalledPanel();
   if (!target) {
-    state.contentLoadFailed = false;
     state.installedLoading = false;
     return;
   }
 
-  const data = await apiGet(`/api/instances/content?instance_id=${encodeURIComponent(target.id)}`, 8000);
+  const data = await apiGet(`/api/instances/content?instance_id=${encodeURIComponent(targetId)}`, 8000);
+  // Kullanıcı bu sırada profil değiştirdiyse eski yanıtı uygulamaya sokma.
+  if (String((getModrinthTarget() || {}).id || "") !== targetId) return;
   state.installedLoading = false;
   if (!data || data.success !== true) {
     state.contentLoadFailed = true;
@@ -2230,6 +2684,7 @@ async function refreshInstalledContent() {
     return;
   }
   state.contentLoadFailed = false;
+  state.installedContentInstanceId = targetId;
 
   const categories = data.categories || {};
   ["mod", "shader", "resourcepack"].forEach(cat => {
@@ -2257,7 +2712,7 @@ function ensureVersionButton(card, installed) {
     btn.type = "button";
     btn.className = "btn-mod-ver";
     btn.title = "Bu içeriğin başka bir sürümünü kur";
-    btn.textContent = "⇄ Sürüm Değiştir";
+    btn.textContent = "Sürüm değiştir";
     btn.addEventListener("click", () => {
       openVersionSwitchOverlay({
         slug: card.getAttribute("data-slug") || "",
@@ -2285,7 +2740,7 @@ function applyInstalledStates() {
       const btn = card.querySelector(".btn-mod-dl");
       if (btn) {
         btn.disabled = true;
-        btn.textContent = "✓ Yüklü";
+        btn.textContent = "Yüklü";
       }
       ensureVersionButton(card, true);
       if (state.hideInstalled) {
@@ -2297,7 +2752,7 @@ function applyInstalledStates() {
       const btn = card.querySelector(".btn-mod-dl");
       if (btn && btn.dataset.kind !== "modpack") {
         btn.disabled = false;
-        btn.textContent = "⚡ Hızlı Kur";
+        btn.textContent = "Kur";
       }
       ensureVersionButton(card, false);
     }
@@ -2328,12 +2783,12 @@ function renderInstalledPanel() {
 
   const cat = state.installedCategory || "mod";
   const files = state.installedContent[cat] || [];
-  const icons = { mod: "🧩", shader: "✨", resourcepack: "🎨" };
+  const icons = { mod: "M", shader: "S", resourcepack: "R" };
   wrap.innerHTML = "";
 
   if (!target) {
     wrap.innerHTML = `<div class="empty-state empty-state-compact">
-      <div class="empty-state-icon" aria-hidden="true">📥</div>
+      <div class="empty-state-icon" aria-hidden="true">—</div>
       <h3 class="empty-state-title">Kurulum hedefi seçilmedi</h3>
       <p class="empty-state-desc">Yönetmek için üstten bir profil seçin.</p>
     </div>`;
@@ -2341,7 +2796,7 @@ function renderInstalledPanel() {
   }
   if (state.contentLoadFailed) {
     wrap.innerHTML = `<div class="empty-state empty-state-compact">
-      <div class="empty-state-icon" aria-hidden="true">⚠️</div>
+      <div class="empty-state-icon" aria-hidden="true">—</div>
       <h3 class="empty-state-title">İçerik listesi alınamadı</h3>
       <p class="empty-state-desc">Core eski sürümde olabilir; launcher'ı kapatıp yeniden başlatın.</p>
     </div>`;
@@ -2356,7 +2811,7 @@ function renderInstalledPanel() {
   if (files.length === 0) {
     const labels = { mod: "mod", shader: "shader", resourcepack: "doku paketi" };
     wrap.innerHTML = `<div class="empty-state empty-state-compact">
-      <div class="empty-state-icon" aria-hidden="true">${icons[cat] || "📦"}</div>
+      <div class="empty-state-icon" aria-hidden="true">${icons[cat] || "M"}</div>
       <h3 class="empty-state-title">Bu profilde henüz ${labels[cat]} yok</h3>
       <p class="empty-state-desc">Modrinth sekmesinden içerik kurarak başlayın.</p>
     </div>`;
@@ -2380,7 +2835,7 @@ function renderInstalledPanel() {
 
     const iconSpan = document.createElement("span");
     iconSpan.className = "installed-row-icon";
-    iconSpan.textContent = icons[cat] || "📦";
+    iconSpan.textContent = icons[cat] || "M";
     if (f.has_icon) {
       const img = document.createElement("img");
       img.className = "installed-row-icon-img";
@@ -2390,7 +2845,7 @@ function renderInstalledPanel() {
         `&category=${encodeURIComponent(cat)}&name=${encodeURIComponent(f.name)}&t=${Math.round(f.mtime || 0)}`;
       img.addEventListener("error", () => {
         img.remove();
-        iconSpan.textContent = icons[cat] || "📦";
+        iconSpan.textContent = icons[cat] || "M";
       });
       iconSpan.textContent = "";
       iconSpan.appendChild(img);
@@ -2407,7 +2862,7 @@ function renderInstalledPanel() {
     delBtn.className = "btn-installed-delete btn btn-ghost btn-danger-ghost";
     delBtn.title = "Bu içeriği profilden kaldır";
     delBtn.setAttribute("aria-label", "Bu içeriği profilden kaldır");
-    delBtn.textContent = "🗑️";
+    delBtn.textContent = "×";
     delBtn.addEventListener("click", () => deleteInstalledContent(cat, f.name));
 
     row.appendChild(iconSpan);
@@ -2426,29 +2881,36 @@ function cleanContentName(name) {
 async function deleteInstalledContent(category, name) {
   const target = getModrinthTarget();
   if (!target) return;
+  const targetId = String(target.id || "");
 
   const ok = await showConfirmDialog({
-    icon: "🗑️",
-    title: "İçerik Silinsin mi?",
+    icon: "!",
+    title: "İçerik silinsin mi?",
     message: `"${name}" dosyası "${target.name}" profilinden kalıcı olarak silinecek. Bu işlem geri alınamaz.`,
     okText: "Sil",
     danger: true
   });
   if (!ok) return;
 
+  // Onay beklenirken profil değiştiyse yanlış profilden silme.
+  if (String((getModrinthTarget() || {}).id || "") !== targetId) {
+    showToast("Profil değişti; silme işlemi iptal edildi.", "info");
+    return;
+  }
+
   const data = await apiPost("/api/instances/content/delete", {
-    instance_id: target.id,
+    instance_id: targetId,
     category: category,
     name: name
   }, 15000);
 
   if (data && data.success) {
-    showToast(`🗑️ ${name} silindi.`, "success");
+    showToast(`${name} silindi.`, "success");
     await refreshInstalledContent();
     applyInstalledStates();
     loadInstances();
   } else {
-    showToast(`⚠️ ${(data && data.error) || "Dosya silinemedi."}`, "error");
+    showToast(` ${(data && data.error) || "Dosya silinemedi."}`, "error");
   }
 }
 
@@ -2466,25 +2928,34 @@ function showConfirmDialog(options = {}) {
     const okBtn = document.getElementById("btnConfirmOk");
     const cancelBtn = document.getElementById("btnConfirmCancel");
 
-    if (iconEl) iconEl.textContent = options.icon || "⚠️";
+    if (iconEl) iconEl.textContent = options.icon || "";
     if (titleEl) titleEl.textContent = options.title || "Emin misiniz?";
     if (msgEl) msgEl.textContent = options.message || "";
     if (okBtn) {
       okBtn.textContent = options.okText || "Onayla";
       okBtn.className = options.danger ? "btn-confirm-danger" : "btn-primary-action";
+      okBtn.disabled = false;
     }
 
+    let settled = false;
     const cleanup = (value) => {
+      if (settled) return;
+      settled = true;
       modal.style.display = "none";
-      if (okBtn) okBtn.removeEventListener("click", onOk);
-      if (cancelBtn) cancelBtn.removeEventListener("click", onCancel);
+      // onclick ataması önceki diyaloğun handler'ını da ezdiği için çift
+      // tıklamada iki silme isteği gitmez.
+      if (okBtn) okBtn.onclick = null;
+      if (cancelBtn) cancelBtn.onclick = null;
       resolve(value);
     };
-    const onOk = () => cleanup(true);
+    const onOk = () => {
+      if (okBtn) okBtn.disabled = true;
+      cleanup(true);
+    };
     const onCancel = () => cleanup(false);
 
-    if (okBtn) okBtn.addEventListener("click", onOk);
-    if (cancelBtn) cancelBtn.addEventListener("click", onCancel);
+    if (okBtn) okBtn.onclick = onOk;
+    if (cancelBtn) cancelBtn.onclick = onCancel;
     modal.style.display = "flex";
   });
 }
@@ -2512,16 +2983,16 @@ function buildModCard(hit, index) {
     img.loading = "lazy";
     img.addEventListener("error", () => {
       img.remove();
-      iconBox.textContent = isModpack ? "📦" : "🧩";
+      iconBox.textContent = isModpack ? "P" : "M";
     });
     iconBox.appendChild(img);
   } else {
-    iconBox.textContent = isModpack ? "📦" : "🧩";
+    iconBox.textContent = isModpack ? "P" : "M";
   }
 
-  let buttonLabel = "⚡ Hızlı Kur";
-  if (isModpack) buttonLabel = "📦 Profil Olarak Kur";
-  else if (installed) buttonLabel = "✓ Yüklü";
+  let buttonLabel = "Kur";
+  if (isModpack) buttonLabel = "Profil olarak kur";
+  else if (installed) buttonLabel = "Yüklü";
 
   const content = document.createElement("div");
   content.className = "mod-content";
@@ -2530,8 +3001,8 @@ function buildModCard(hit, index) {
     <p class="mod-desc">${escapeHtml(hit.description || "Açıklama bulunmuyor.")}</p>
     <div class="mod-bottom-row">
       <span style="font-size: 11px; color: var(--text-muted);">↓ ${(hit.downloads || 0).toLocaleString()}</span>
-      ${installed ? '<span class="mod-installed-chip">✓ Bu profilde yüklü</span>' : ""}
-      ${!installed && target ? `<span class="mod-target-chip" title="Kurulum hedefi: ${escapeHtml(target.name)}">📥 ${escapeHtml(target.name)}</span>` : ""}
+      ${installed ? '<span class="mod-installed-chip">Bu profilde yüklü</span>' : ""}
+      ${!installed && target ? `<span class="mod-target-chip" title="Kurulum hedefi: ${escapeHtml(target.name)}">${escapeHtml(target.name)}</span>` : ""}
       <span class="mod-card-actions">
         <button class="btn-mod-dl" data-kind="${isModpack ? "modpack" : category}">${buttonLabel}</button>
       </span>
@@ -2574,7 +3045,7 @@ function updateModrinthFooter(total = 0) {
   } else if (state.modrinthHasMore) {
     footer.innerHTML = `<span>↓ Kaydırdıkça daha fazla içerik otomatik yüklenecek...</span>`;
   } else if (state.modrinthHits.length > 0) {
-    footer.innerHTML = `<span>✓ Tüm sonuçlar yüklendi (${state.modrinthHits.length}${total ? "/" + total : ""}).</span>`;
+    footer.innerHTML = `<span> Tüm sonuçlar yüklendi (${state.modrinthHits.length}${total ? "/" + total : ""}).</span>`;
   } else {
     footer.innerHTML = "";
   }
@@ -2582,8 +3053,12 @@ function updateModrinthFooter(total = 0) {
 
 async function fetchModrinth(reset = true) {
   const wrap = document.getElementById("modrinthResultsWrap");
-  if (!wrap || state.modrinthLoading) return;
-  if (!reset && !state.modrinthHasMore) return;
+  if (!wrap) return;
+  if (!reset && (!state.modrinthHasMore || state.modrinthLoading)) return;
+
+  // Her yeni arama öncekini geçersiz kılar; geç gelen eski yanıt yok sayılır.
+  const reqId = ++state.modrinthReqId;
+  const isCurrent = () => reqId === state.modrinthReqId;
 
   state.modrinthLoading = true;
 
@@ -2597,7 +3072,10 @@ async function fetchModrinth(reset = true) {
       <div class="skeleton skeleton-card"></div>
       <div class="skeleton skeleton-card"></div>
       <div class="skeleton skeleton-card"></div>`;
-    await refreshInstalledContent();
+    // Yüklü içerik kontrolünü aramanın önüne koyma; paralel çalışsın.
+    refreshInstalledContent().then(() => {
+      if (isCurrent()) applyInstalledStates();
+    });
   } else {
     updateModrinthFooter();
   }
@@ -2619,22 +3097,26 @@ async function fetchModrinth(reset = true) {
   });
 
   const data = await apiGet(`/api/modrinth/search?${params.toString()}`, 15000);
+  if (!isCurrent()) return;
   state.modrinthLoading = false;
 
   if (data && data.error) {
     if (reset) {
       wrap.innerHTML = `
         <div class="loading-state">
-          <span class="np-net-error">⚠️ ${escapeHtml(data.error)}</span>
+          <span class="np-net-error"> ${escapeHtml(data.error)}</span>
           <span class="np-net-hint">Ağ testi: <code>http://127.0.0.1:18420/api/net-test</code> adresini tarayıcıda açın.</span>
         </div>`;
       state.modrinthHasMore = false;
+      updateModrinthFooter();
     }
     showNetErrorOnce(data.error);
     return;
   }
 
   if (!data) {
+    state.modrinthHasMore = false;
+    updateModrinthFooter();
     if (reset) {
       wrap.innerHTML = `<div class="loading-state"><span>Modrinth şu anda yanıt vermiyor. Daha sonra tekrar deneyin.</span></div>`;
     }
@@ -2677,17 +3159,23 @@ async function installModrinthProject(hit, buttonEl) {
     return;
   }
 
+  if (buttonEl && buttonEl.disabled) return;
+  if (buttonEl) buttonEl.disabled = true;
+  const release = () => { if (buttonEl) buttonEl.disabled = false; };
+
   const category = contentCategoryFromType(hit.project_type || state.modrinthType);
   const target = getModrinthTarget();
 
   // Hedef profil yoksa sessizce nereye kurulacağı belirsiz olmasın: profil oluşturmaya yönlendir
   if (!target) {
+    release();
     showToast("İçerik kurmak için önce bir profil oluşturun.", "info");
     openCreateInstanceModal();
     return;
   }
 
   if (category === "mod" && target.loader === "vanilla") {
+    release();
     showToast("Vanilla profil mod yüklemez. PROFİLLER sekmesinden Fabric/Forge profili seçin.", "info");
     return;
   }
@@ -2703,22 +3191,24 @@ async function installModrinthProject(hit, buttonEl) {
     const check = await apiGet(`/api/modrinth/check?${params.toString()}`, 12000);
 
     if (check && check.has_file === false) {
+      release();
       showToast("Bu paket için indirilebilir dosya bulunamadı.", "error");
       return;
     }
 
     if (check && check.has_file && !check.exact_match) {
       const ok = await showConfirmDialog({
-        icon: "⚠️",
-        title: "Sürüm Tam Eşleşmiyor",
+        icon: "!",
+        title: "Sürüm tam eşleşmiyor",
         message: `Bu paket oyun sürümünüzle (MC ${target.version}) tam eşleşmiyor (en yakın: ${check.matched_game_version || "bilinmiyor"}). Çoğu zaman sorunsuz çalışır. Yine de indirmek ister misiniz?`,
-        okText: "Yine de İndir"
+        okText: "Yine de indir"
       });
-      if (!ok) return;
+      if (!ok) { release(); return; }
     }
   }
 
-  await downloadModrinthProject(hit, buttonEl, { category, force: category !== "mod" });
+  release();
+  await downloadModrinthProject(hit, buttonEl, { category, force: category !== "mod", targetId: target.id });
 }
 
 async function installModpackAsProfile(hit, buttonEl) {
@@ -2728,10 +3218,10 @@ async function installModpackAsProfile(hit, buttonEl) {
 
   if (buttonEl) {
     buttonEl.disabled = true;
-    buttonEl.textContent = "📦 Profil oluşturuluyor...";
+    buttonEl.textContent = " Profil oluşturuluyor...";
   }
 
-  showToast(`📦 ${hit.title || hit.slug} yeni profil olarak ekleniyor...`, "info");
+  showToast(` ${hit.title || hit.slug} yeni profil olarak ekleniyor...`, "info");
 
   const data = await apiPost("/api/modrinth/modpack/install", {
     slug: hit.slug,
@@ -2740,16 +3230,16 @@ async function installModpackAsProfile(hit, buttonEl) {
 
   if (buttonEl) {
     buttonEl.disabled = false;
-    buttonEl.textContent = originalText || "📦 Profil Olarak Kur";
+    buttonEl.textContent = originalText || "Profil olarak kur";
   }
 
   if (data && data.success && data.instance) {
     await loadInstances();
     ensurePackPolling();
     switchTab("tab-instances");
-    showToast(`✓ "${data.instance.name}" profili oluşturuldu, kurulum arka planda sürüyor.`, "success");
+    showToast(` "${data.instance.name}" profili oluşturuldu, kurulum arka planda sürüyor.`, "success");
   } else {
-    showToast(`⚠️ ${(data && data.error) || "Modpack profili oluşturulamadı."}`, "error");
+    showToast(` ${(data && data.error) || "Modpack profili oluşturulamadı."}`, "error");
   }
 }
 
@@ -2759,11 +3249,16 @@ async function downloadModrinthProject(hit, buttonEl, opts = {}) {
 
   const category = opts.category || "mod";
   const force = opts.force === true;
+  const expectedTargetId = opts.targetId ? String(opts.targetId) : "";
   const target = getModrinthTarget();
 
   if (!target) {
     showToast("İçerik kurmak için önce bir profil oluşturun.", "info");
     openCreateInstanceModal();
+    return;
+  }
+  if (expectedTargetId && String(target.id) !== expectedTargetId) {
+    showToast("Profil değişti; kurulum iptal edildi.", "info");
     return;
   }
 
@@ -2774,7 +3269,7 @@ async function downloadModrinthProject(hit, buttonEl, opts = {}) {
   }
 
   const typeLabels = { mod: "Mod", shader: "Shader", resourcepack: "Doku paketi" };
-  showToast(`📥 ${typeLabels[category] || "İçerik"} → "${target.name}" profiline indiriliyor...`, "info");
+  showToast(` ${typeLabels[category] || "İçerik"} → "${target.name}" profiline indiriliyor...`, "info");
 
   const data = await apiPost("/api/modrinth/install", {
     slug: slug,
@@ -2790,23 +3285,23 @@ async function downloadModrinthProject(hit, buttonEl, opts = {}) {
   if (data && data.needs_confirm) {
     if (buttonEl) {
       buttonEl.disabled = false;
-      buttonEl.textContent = originalText || "⚡ Hızlı Kur";
+      buttonEl.textContent = originalText || "Kur";
     }
     const ok = await showConfirmDialog({
-      icon: "⚠️",
+      icon: "",
       title: "Sürüm Tam Eşleşmiyor",
       message: `${data.message || "Bu paket sürümünüzle tam eşleşmiyor olabilir."} Yine de indirmek ister misiniz?`,
       okText: "Yine de İndir"
     });
     if (ok) {
-      await downloadModrinthProject(hit, buttonEl, { category, force: true });
+      await downloadModrinthProject(hit, buttonEl, { category, force: true, targetId: expectedTargetId });
     }
     return;
   }
 
   if (buttonEl) {
     buttonEl.disabled = false;
-    buttonEl.textContent = originalText || "⚡ Hızlı Kur";
+    buttonEl.textContent = originalText || "Kur";
   }
 
   if (data && data.success) {
@@ -2814,15 +3309,15 @@ async function downloadModrinthProject(hit, buttonEl, opts = {}) {
     if (data.installed_dependencies || data.failed_dependencies) {
       modInstallToast(String((hit && hit.title) || slug), data);
     } else {
-      showToast(`✓ ${data.filename || slug} → "${target.name}" profiline kuruldu${warning}.`, "success");
+      showToast(` ${data.filename || slug} → "${target.name}" profiline kuruldu${warning}.`, "success");
     }
     await refreshInstalledContent();
     applyInstalledStates();
     loadInstances();
   } else if (data && data.error) {
-    showToast(`⚠️ ${data.error}`, "error");
+    showToast(` ${data.error}`, "error");
   } else {
-    showToast("⚠️ İndirme isteği tamamlanamadı, tekrar deneyin.", "error");
+    showToast(" İndirme isteği tamamlanamadı, tekrar deneyin.", "error");
   }
 }
 
@@ -2846,19 +3341,49 @@ async function loadScreenshots() {
   }
 
   shots.forEach(sc => {
+    const url = `${API_BASE}/api/screenshots/file?name=${encodeURIComponent(sc.name)}` +
+      `&t=${Math.round(sc.mtime || 0)}`;
     const card = document.createElement("div");
     card.className = "gallery-card";
     card.innerHTML = `
       <div class="gallery-thumb">
-        <span style="font-size: 32px;">📸</span>
+        <img loading="lazy" src="${url}" alt="${escapeHtml(sc.name)}">
       </div>
       <div class="gallery-meta">
         <span>${escapeHtml(sc.name)}</span>
         <span>${Math.round((sc.size || 0) / 1024)} KB</span>
       </div>
     `;
+    const img = card.querySelector("img");
+    if (img) {
+      img.addEventListener("error", () => {
+        img.remove();
+        const thumb = card.querySelector(".gallery-thumb");
+        if (thumb) thumb.textContent = "—";
+      });
+    }
+    card.addEventListener("click", () => openGalleryLightbox(url));
     wrap.appendChild(card);
   });
+}
+
+function openGalleryLightbox(url) {
+  const box = document.getElementById("galleryLightbox");
+  const img = document.getElementById("galleryLightboxImg");
+  if (!box || !img || !url) return;
+  img.src = url;
+  box.classList.add("show");
+  box.setAttribute("aria-hidden", "false");
+}
+
+function closeGalleryLightbox() {
+  const box = document.getElementById("galleryLightbox");
+  const img = document.getElementById("galleryLightboxImg");
+  if (box) {
+    box.classList.remove("show");
+    box.setAttribute("aria-hidden", "true");
+  }
+  if (img) img.removeAttribute("src");
 }
 
 // ================== SİSTEM KLASÖRÜ AÇMA ==================
@@ -2875,6 +3400,27 @@ function setupTauriWindowControls() {
   if (window.__TAURI__ && window.__TAURI__.window) {
     try {
       const appWin = window.__TAURI__.window.getCurrentWindow();
+      let closeApproved = false;
+      if (typeof appWin.onCloseRequested === "function") {
+        appWin.onCloseRequested(async (event) => {
+          if (closeApproved) return;
+          const busy = state.engineMode === "installing" || state.engineMode === "running" || state.launchRequested;
+          if (!busy) return;
+          event.preventDefault();
+          const ok = await showConfirmDialog({
+            icon: "!",
+            title: "Launcher kapatılsın mı?",
+            message: "Bir kurulum veya oyun oturumu sürüyor. Kapatmak işlemi yarıda bırakabilir.",
+            okText: "Yine de kapat",
+            danger: true
+          });
+          if (ok) {
+            closeApproved = true;
+            cleanupTimers();
+            appWin.close();
+          }
+        }).catch(() => {});
+      }
       if (btnMin) btnMin.addEventListener("click", () => appWin.minimize());
       if (btnMax) btnMax.addEventListener("click", () => appWin.toggleMaximize());
       if (btnClose) btnClose.addEventListener("click", () => appWin.close());
@@ -2892,18 +3438,18 @@ function setupTauriWindowControls() {
    ============================================================================== */
 
 const PDS_CAT_INFO = {
-  mod: { label: "Modlar", icon: "🧩", dir: "mods" },
-  shader: { label: "Shader Paketleri", icon: "✨", dir: "shaderpacks" },
-  resourcepack: { label: "Kaynak Paketleri", icon: "🎨", dir: "resourcepacks" }
+  mod: { label: "Modlar", icon: "M", dir: "mods" },
+  shader: { label: "Shader Paketleri", icon: "S", dir: "shaderpacks" },
+  resourcepack: { label: "Kaynak Paketleri", icon: "R", dir: "resourcepacks" }
 };
 
 // Faz 2/3 sekmeleri: menüde görünür, içerik olarak "Yakında" kartı gösterilir.
 const PDS_SOON_TABS = {
-  notes: { label: "Notlar", icon: "📝", folder: "notes", desc: "Profil notları sekmesi yakında: not defteri ve hızlı kayıtlar." },
-  worlds: { label: "Dünyalar", icon: "🌍", folder: "saves", desc: "Dünya yönetimi yakında: listeleme, kopyalama ve yedekleme." },
-  servers: { label: "Sunucular", icon: "🌐", folder: "servers", desc: "Sunucu listesi yönetimi yakında: hızlı bağlantı ve favoriler." },
-  screenshots: { label: "Ekran Görüntüleri", icon: "📸", folder: "screenshots", desc: "Profil bazlı ekran görüntüsü galerisi yakında." },
-  others: { label: "Diğer Kayıtlar", icon: "🗄️", folder: "logs", desc: "Log ve crash kayıtları yönetimi yakında." }
+  notes: { label: "Notlar", icon: "N", folder: "notes", desc: "Profil notları sekmesi yakında: not defteri ve hızlı kayıtlar." },
+  worlds: { label: "Dünyalar", icon: "W", folder: "saves", desc: "Dünya yönetimi yakında: listeleme, kopyalama ve yedekleme." },
+  servers: { label: "Sunucular", icon: "", folder: "servers", desc: "Sunucu listesi yönetimi yakında: hızlı bağlantı ve favoriler." },
+  screenshots: { label: "Ekran Görüntüleri", icon: "", folder: "screenshots", desc: "Profil bazlı ekran görüntüsü galerisi yakında." },
+  others: { label: "Diğer Kayıtlar", icon: "", folder: "logs", desc: "Log ve crash kayıtları yönetimi yakında." }
 };
 
 const PDS_LOADER_LABELS = {
@@ -2918,12 +3464,13 @@ const pdsState = {
   content: { mod: null, shader: null, resourcepack: null },
   contentError: "",
   missingDeps: [],
-  modrinth: { type: "mod", query: "", hits: [], loading: false, searched: false },
+  modrinth: { type: "mod", query: "", hits: [], loading: false, searched: false, reqId: 0 },
   drawerOpen: false,
+  drawerKey: "",
   // Faz 3: shader mağazası durumu
-  store: { open: false, query: "", sort: "downloads", hits: [], loading: false, searched: false, error: "", installed: new Set() },
+  store: { open: false, query: "", sort: "downloads", hits: [], loading: false, searched: false, error: "", installed: new Set(), reqId: 0 },
   // Faz 4: profil varlıkları
-  note: { loaded: false, saving: false, timer: null, lastSaved: "", pending: null },
+  note: { loaded: false, saving: false, timer: null, lastSaved: "", pending: null, queued: null, instanceId: "" },
   worlds: null,
   servers: null,
   shots: null,
@@ -3034,15 +3581,24 @@ function openProfileDetail(instanceId, tabId) {
     return;
   }
 
+  // Önceki profilin bekleyen notunu kaydetmeye çalış (instanceId değişmeden).
+  if (pdsState.note.timer) {
+    clearTimeout(pdsState.note.timer);
+    pdsState.note.timer = null;
+  }
+  if (pdsState.note.pending !== null && pdsState.note.pending !== pdsState.note.lastSaved) {
+    pdsSaveNote(pdsState.note.pending, null);
+  }
+
   pdsState.instanceId = instanceId;
   pdsState.instance = inst;
   pdsState.activeTab = tabId || "mods";
   pdsState.content = { mod: null, shader: null, resourcepack: null };
   pdsState.contentError = "";
   pdsState.missingDeps = [];
-  pdsState.modrinth = { type: "mod", query: "", hits: [], loading: false, searched: false };
-  pdsState.store = { open: false, query: "", sort: "downloads", hits: [], loading: false, searched: false, error: "", installed: new Set() };
-  pdsState.note = { loaded: false, saving: false, timer: null, lastSaved: "", pending: null };
+  pdsState.modrinth = { type: "mod", query: "", hits: [], loading: false, searched: false, reqId: 0 };
+  pdsState.store = { open: false, query: "", sort: "downloads", hits: [], loading: false, searched: false, error: "", installed: new Set(), reqId: 0 };
+  pdsState.note = { loaded: false, saving: false, timer: null, lastSaved: "", pending: null, queued: null, instanceId: instanceId };
   pdsState.worlds = null;
   pdsState.servers = null;
   pdsState.shots = null;
@@ -3156,11 +3712,11 @@ function pdsRenderContentTab(pane, cat) {
   pane.innerHTML = `
     <div class="pds-section-head">
       <div>
-        <h3 class="pds-section-title">${info.icon} ${info.label}</h3>
+        <h3 class="pds-section-title">${info.label}</h3>
         <p class="pds-section-sub">Bu profildeki kurulu içerikler. Anahtarla aç/kapat, detaydan Modrinth bilgisine bak.</p>
       </div>
       <div class="pds-head-actions">
-        ${cat === "shader" ? '<button type="button" class="btn-primary-action" id="pdsShaderStoreBtn">🛍️ Paket İndir</button>' : ""}
+        ${cat === "shader" ? '<button type="button" class="btn-primary-action" id="pdsShaderStoreBtn"> Paket İndir</button>' : ""}
         <button type="button" class="btn-secondary" id="pdsRefreshBtn">↻ Yenile</button>
       </div>
     </div>
@@ -3185,11 +3741,13 @@ function pdsRenderContentTab(pane, cat) {
 async function pdsLoadMissingDeps() {
   const warn = document.getElementById("pdsDepsWarn");
   if (!warn || pdsState.activeTab !== "mods") return;
+  const instanceId = String(pdsState.instanceId || "");
 
   const data = await apiGet(
-    `/api/instances/missing-deps?instance=${encodeURIComponent(pdsState.instanceId)}`,
+    `/api/instances/missing-deps?instance=${encodeURIComponent(instanceId)}`,
     20000
   );
+  if (String(pdsState.instanceId || "") !== instanceId) return;
   if (pdsState.activeTab !== "mods" || !document.getElementById("pdsDepsWarn")) return;
 
   const missing = (data && data.missing) || [];
@@ -3205,7 +3763,7 @@ async function pdsLoadMissingDeps() {
   warn.innerHTML = "";
 
   const text = document.createElement("span");
-  text.textContent = `⚠️ ${pdsState.missingDeps.length} eksik bağımlılık`;
+  text.textContent = ` ${pdsState.missingDeps.length} eksik bağımlılık`;
 
   const btn = document.createElement("button");
   btn.type = "button";
@@ -3220,6 +3778,7 @@ async function pdsLoadMissingDeps() {
 async function pdsInstallAllMissingDeps(buttonEl) {
   const inst = pdsSyncInstance();
   if (!inst) return;
+  const instanceId = String(pdsState.instanceId || "");
   const missing = Array.isArray(pdsState.missingDeps) ? pdsState.missingDeps.slice() : [];
   if (missing.length === 0) return;
 
@@ -3233,13 +3792,14 @@ async function pdsInstallAllMissingDeps(buttonEl) {
   let failCount = 0;
 
   for (const dep of missing) {
+    if (String(pdsState.instanceId || "") !== instanceId) break;
     const name = dep.title || dep.slug || dep.project_id || "Bağımlılık";
-    showToast(`📥 Bağımlılık kuruluyor: ${name}...`, "info");
+    showToast(`Bağımlılık kuruluyor: ${name}...`, "info");
     const data = await apiPost("/api/modrinth/install", {
       slug: dep.slug,
       version: inst.version,
       loader: inst.loader,
-      instance_id: pdsState.instanceId,
+      instance_id: instanceId,
       project_type: "mod",
       install_dependencies: true
     }, 180000);
@@ -3247,21 +3807,23 @@ async function pdsInstallAllMissingDeps(buttonEl) {
     if (data && data.success) {
       okCount++;
       const installed = (data.installed_dependencies || []).map(d => d.title || d.slug).join(", ");
-      showToast(`✓ ${name} kuruldu${installed ? " • bağımlılıklar: " + installed : ""}`, "success");
+      showToast(`${name} kuruldu${installed ? " • bağımlılıklar: " + installed : ""}`, "success");
     } else {
       failCount++;
       const reason = (data && data.error) || "bilinmeyen hata";
       console.warn("Bağımlılık kurulamadı:", dep, reason);
-      showToast(`⚠️ ${name} kurulamadı: ${reason}`, "error");
+      showToast(`${name} kurulamadı: ${reason}`, "error");
     }
   }
 
   if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = "Hepsini kur"; }
-  await pdsLoadContent("mod", true);
-  await pdsLoadMissingDeps();
+  if (String(pdsState.instanceId || "") === instanceId) {
+    await pdsLoadContent("mod", true);
+    await pdsLoadMissingDeps();
+  }
   loadInstances();
   if (okCount > 0 && failCount === 0) {
-    showToast(`✓ ${okCount} eksik bağımlılık kuruldu.`, "success");
+    showToast(`${okCount} eksik bağımlılık kuruldu.`, "success");
   }
 }
 
@@ -3273,8 +3835,11 @@ async function pdsLoadContent(cat, force) {
     return;
   }
 
+  const instanceId = String(pdsState.instanceId || "");
   pdsState.contentError = "";
-  const data = await apiGet(`/api/instances/content?instance_id=${encodeURIComponent(pdsState.instanceId)}`, 10000);
+  const data = await apiGet(`/api/instances/content?instance_id=${encodeURIComponent(instanceId)}`, 10000);
+  // Profil değiştiyse eski yanıtı yeni profilin listesine yazma.
+  if (String(pdsState.instanceId || "") !== instanceId) return;
   if (!data || data.success !== true) {
     pdsState.contentError = "İçerik listesi alınamadı. Core bağlantısını kontrol edin.";
     if (pdsState.activeTab === pdsTabForCat(cat)) pdsRenderContentList(cat);
@@ -3294,7 +3859,7 @@ function pdsRenderContentList(cat) {
   const files = pdsState.content[cat] || [];
 
   if (pdsState.contentError) {
-    wrap.innerHTML = `<div class="pds-empty">⚠️ ${pdsEsc(pdsState.contentError)}</div>`;
+    wrap.innerHTML = `<div class="pds-empty"> ${pdsEsc(pdsState.contentError)}</div>`;
     return;
   }
   if (files.length === 0) {
@@ -3361,7 +3926,7 @@ function pdsRenderContentList(cat) {
       verBtn.type = "button";
       verBtn.className = "pds-btn pds-btn-ver";
       verBtn.title = "Bu içeriğin başka bir sürümünü kur";
-      verBtn.textContent = "⇄ Sürüm";
+      verBtn.textContent = "Sürüm";
       verBtn.addEventListener("click", () => openVersionSwitchOverlay({
         slug: f.slug,
         title: displayName,
@@ -3380,7 +3945,7 @@ function pdsRenderContentList(cat) {
     delBtn.type = "button";
     delBtn.className = "pds-btn pds-btn-danger";
     delBtn.title = "Sil";
-    delBtn.textContent = "🗑";
+    delBtn.textContent = "Sil";
     delBtn.addEventListener("click", () => pdsDeleteContent(cat, f));
     actions.appendChild(delBtn);
 
@@ -3392,48 +3957,56 @@ function pdsRenderContentList(cat) {
 }
 
 async function pdsToggleContent(cat, item, checkbox) {
+  const instanceId = String(pdsState.instanceId || "");
+  if (!instanceId) return;
   if (checkbox) checkbox.disabled = true;
   const data = await apiPost("/api/instances/content/toggle", {
-    instance: pdsState.instanceId,
+    instance: instanceId,
     category: cat,
     name: item.name
   }, 15000);
   if (checkbox) checkbox.disabled = false;
 
   if (data && data.success) {
-    showToast(data.enabled ? `✓ Etkinleştirildi: ${data.name}` : `⏸ Devre dışı: ${data.name}`, "success");
-    await pdsLoadContent(cat, true);
+    showToast(data.enabled ? `Etkinleştirildi: ${data.name}` : `Devre dışı: ${data.name}`, "success");
+    if (String(pdsState.instanceId || "") === instanceId) await pdsLoadContent(cat, true);
     loadInstances();
   } else {
     if (checkbox) checkbox.checked = item.enabled !== false;
-    showToast(`⚠️ ${(data && data.error) || "İçerik güncellenemedi."}`, "error");
+    showToast(`${(data && data.error) || "İçerik güncellenemedi."}`, "error");
   }
 }
 
 async function pdsDeleteContent(cat, item) {
   const inst = pdsSyncInstance();
+  const instanceId = String(pdsState.instanceId || "");
+  if (!instanceId) return;
   const ok = await showConfirmDialog({
-    icon: "🗑️",
-    title: "İçerik Silinsin mi?",
+    icon: "!",
+    title: "İçerik silinsin mi?",
     message: `"${item.name}" dosyası "${inst ? inst.name : "profil"}" profilinden kalıcı olarak silinecek. Bu işlem geri alınamaz.`,
     okText: "Sil",
     danger: true
   });
   if (!ok) return;
+  if (String(pdsState.instanceId || "") !== instanceId) {
+    showToast("Profil değişti; silme işlemi iptal edildi.", "info");
+    return;
+  }
 
   const data = await apiPost("/api/instances/content/delete", {
-    instance_id: pdsState.instanceId,
+    instance_id: instanceId,
     category: cat,
     name: item.name
   }, 30000);
 
   if (data && data.success) {
-    showToast(`🗑️ ${item.name} silindi.`, "success");
+    showToast(`${item.name} silindi.`, "success");
     if (pdsState.drawerOpen) pdsCloseDrawer();
     await pdsLoadContent(cat, true);
     loadInstances();
   } else {
-    showToast(`⚠️ ${(data && data.error) || "Dosya silinemedi."}`, "error");
+    showToast(`${(data && data.error) || "Dosya silinemedi."}`, "error");
   }
 }
 
@@ -3446,6 +4019,8 @@ function pdsOpenDrawer(item, cat) {
   if (!drawer || !bodyEl) return;
 
   pdsState.drawerOpen = true;
+  const drawerKey = `${cat}:${item.name}`;
+  pdsState.drawerKey = drawerKey;
   drawer.classList.add("open");
   drawer.setAttribute("aria-hidden", "false");
   if (backdrop) backdrop.classList.add("show");
@@ -3457,7 +4032,7 @@ function pdsOpenDrawer(item, cat) {
   const local = { item: item, cat: cat };
   if (item.slug) {
     apiGet(`/api/modrinth/project?slug=${encodeURIComponent(item.slug)}`, 15000).then(data => {
-      if (!pdsState.drawerOpen) return;
+      if (!pdsState.drawerOpen || pdsState.drawerKey !== drawerKey) return;
       if (data && data.success) {
         pdsRenderProjectDrawer(data, local);
       } else {
@@ -3473,6 +4048,7 @@ function pdsCloseDrawer() {
   const drawer = document.getElementById("pdsDrawer");
   const backdrop = document.getElementById("pdsDrawerBackdrop");
   pdsState.drawerOpen = false;
+  pdsState.drawerKey = "";
   if (drawer) {
     drawer.classList.remove("open");
     drawer.setAttribute("aria-hidden", "true");
@@ -3485,13 +4061,18 @@ function pdsDrawerActions(item, cat) {
   const wrap = document.createElement("div");
   wrap.className = "pds-drawer-actions";
 
-  if (item.source_url) {
+  const sourceUrl = safeExternalUrl(item.source_url);
+  if (sourceUrl) {
     const link = document.createElement("a");
     link.className = "pds-btn pds-btn-primary";
-    link.href = item.source_url;
+    link.href = sourceUrl;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
-    link.textContent = "🌐 Ana Sayfa";
+    link.textContent = "Ana sayfa";
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      window.open(sourceUrl, "_blank", "noopener,noreferrer");
+    });
     wrap.appendChild(link);
   }
 
@@ -3502,7 +4083,7 @@ function pdsDrawerActions(item, cat) {
     const installBtn = document.createElement("button");
     installBtn.type = "button";
     installBtn.className = "pds-btn pds-btn-primary";
-    installBtn.textContent = installed ? "Kuruldu ✓" : "⬇ Kur";
+    installBtn.textContent = installed ? "Kuruldu " : "Kur";
     if (installed) {
       installBtn.disabled = true;
       installBtn.classList.add("is-installed");
@@ -3514,7 +4095,7 @@ function pdsDrawerActions(item, cat) {
     const folderBtn = document.createElement("button");
     folderBtn.type = "button";
     folderBtn.className = "pds-btn";
-    folderBtn.textContent = "📂 Klasörü Aç";
+    folderBtn.textContent = "Klasörü aç";
     folderBtn.addEventListener("click", () => openSystemFolder(`instances/${pdsState.instanceId}/${dir}`));
     wrap.appendChild(folderBtn);
     return wrap;
@@ -3523,14 +4104,14 @@ function pdsDrawerActions(item, cat) {
   const folderBtn = document.createElement("button");
   folderBtn.type = "button";
   folderBtn.className = "pds-btn";
-  folderBtn.textContent = "📂 Klasörü Aç";
+  folderBtn.textContent = "Klasörü aç";
   folderBtn.addEventListener("click", () => openSystemFolder(`instances/${pdsState.instanceId}/${dir}`));
   wrap.appendChild(folderBtn);
 
   const delBtn = document.createElement("button");
   delBtn.type = "button";
   delBtn.className = "pds-btn pds-btn-danger";
-  delBtn.textContent = "🗑 Kaldır";
+  delBtn.textContent = " Kaldır";
   delBtn.addEventListener("click", () => pdsDeleteContent(cat, item));
   wrap.appendChild(delBtn);
 
@@ -3565,7 +4146,7 @@ function pdsRenderProjectDrawer(data, local) {
   headInfo.innerHTML = `
     <div class="pds-drawer-name">${pdsEsc(data.title)}</div>
     <div class="pds-chips">${(data.categories || []).map(c => `<span class="pds-chip">${pdsEsc(c)}</span>`).join("")}</div>
-    <div class="pds-drawer-stats">⬇ ${Number(data.downloads || 0).toLocaleString()} indirme • ❤ ${Number(data.follows || 0).toLocaleString()} takipçi</div>
+    <div class="pds-drawer-stats"> ${Number(data.downloads || 0).toLocaleString()} indirme •  ${Number(data.follows || 0).toLocaleString()} takipçi</div>
   `;
   head.appendChild(iconBox);
   head.appendChild(headInfo);
@@ -3678,7 +4259,7 @@ function pdsRenderLocalDrawer(local, note) {
     <div class="pds-drawer-local-name">${info.icon} ${pdsEsc(displayName)}</div>
     <div class="pds-item-meta" style="margin-top:6px;">${pdsEsc(item.name)} • ${pdsEsc(sizeText)}${item.version ? " • v" + pdsEsc(item.version) : ""}</div>
     <p class="pds-drawer-desc" style="margin-top:10px;">${pdsEsc(item.description || "Açıklama bulunmuyor.")}</p>
-    <p class="pds-soon-note">ℹ️ ${pdsEsc(note)}</p>
+    <p class="pds-soon-note">ℹ ${pdsEsc(note)}</p>
   `;
   body.appendChild(card);
   body.appendChild(pdsDrawerActions(item, local.cat));
@@ -3691,21 +4272,21 @@ function pdsRenderModrinthTab(pane) {
   pane.innerHTML = `
     <div class="pds-section-head">
       <div>
-        <h3 class="pds-section-title">🔎 Modrinth</h3>
+        <h3 class="pds-section-title"> Modrinth</h3>
         <p class="pds-section-sub">Arama bu profile göre filtrelenir: MC ${pdsEsc(inst ? inst.version : "?")} • ${pdsEsc(loaderText)}</p>
       </div>
     </div>
     <div class="pds-mr-bar">
       <select class="styled-select" id="pdsMrType" aria-label="İçerik türü">
-        <option value="mod">🧩 Modlar</option>
-        <option value="shader">✨ Shaderlar</option>
-        <option value="resourcepack">🎨 Doku Paketleri</option>
+        <option value="mod">Modlar</option>
+        <option value="shader">Shaderlar</option>
+        <option value="resourcepack">Doku paketleri</option>
       </select>
       <input type="text" class="styled-input" id="pdsMrQuery" placeholder="Ara... (örn: sodium)" autocomplete="off" spellcheck="false">
-      <button type="button" class="btn-primary-action" id="pdsMrSearchBtn">🔍 Ara</button>
+      <button type="button" class="btn-primary-action" id="pdsMrSearchBtn"> Ara</button>
       <label class="pds-deps-toggle" title="Seçili modun Modrinth'teki zorunlu bağımlılıklarını da otomatik kurar">
         <input type="checkbox" id="pdsInstallDepsToggle" class="install-deps-cb">
-        <span>🧷 Gerekli bağımlılıkları da kur</span>
+        <span> Gerekli bağımlılıkları da kur</span>
       </label>
     </div>
     <div class="pds-mr-grid" id="pdsMrResults"></div>
@@ -3745,6 +4326,7 @@ async function pdsSearchModrinth() {
   pdsState.modrinth.type = type;
   pdsState.modrinth.query = q;
   pdsState.modrinth.loading = true;
+  const reqId = ++pdsState.modrinth.reqId;
 
   const wrap = document.getElementById("pdsMrResults");
   if (wrap) wrap.innerHTML = `<div class="pds-loading"><div class="spinner"></div><span>Modrinth taranıyor...</span></div>`;
@@ -3760,6 +4342,7 @@ async function pdsSearchModrinth() {
   });
 
   const data = await apiGet(`/api/modrinth/search?${params.toString()}`, 20000);
+  if (reqId !== pdsState.modrinth.reqId) return;
   pdsState.modrinth.loading = false;
 
   if (!data || data.error || !Array.isArray(data.hits)) {
@@ -3785,7 +4368,7 @@ function pdsRenderMrResults(errorMsg) {
     return;
   }
   if (errorMsg) {
-    wrap.innerHTML = `<div class="pds-empty">⚠️ ${pdsEsc(errorMsg)}</div>`;
+    wrap.innerHTML = `<div class="pds-empty"> ${pdsEsc(errorMsg)}</div>`;
     return;
   }
   if (!pdsState.modrinth.searched) {
@@ -3816,7 +4399,7 @@ function pdsRenderMrResults(errorMsg) {
       img.alt = "";
       img.loading = "lazy";
       img.addEventListener("error", () => { img.remove(); icon.textContent = info.icon; });
-      icon.textContent = "";
+      icon.textContent = "W";
       icon.appendChild(img);
     }
 
@@ -3825,13 +4408,13 @@ function pdsRenderMrResults(errorMsg) {
     bodyEl.innerHTML = `
       <div class="pds-mr-title" title="${pdsEsc(hit.title)}">${pdsEsc(hit.title || hit.slug)}</div>
       <div class="pds-mr-desc">${pdsEsc(hit.description || "")}</div>
-      <div class="pds-mr-meta">⬇ ${Number(hit.downloads || 0).toLocaleString()}${hit.author ? " • " + pdsEsc(hit.author) : ""}</div>
+      <div class="pds-mr-meta"> ${Number(hit.downloads || 0).toLocaleString()}${hit.author ? " • " + pdsEsc(hit.author) : ""}</div>
     `;
 
     const installBtn = document.createElement("button");
     installBtn.type = "button";
     installBtn.className = "pds-btn pds-btn-primary";
-    installBtn.textContent = "⚡ Kur";
+    installBtn.textContent = " Kur";
     installBtn.addEventListener("click", () => pdsInstallSearchHit(hit, installBtn));
 
     card.appendChild(icon);
@@ -3853,7 +4436,7 @@ async function pdsInstallSearchHit(hit, buttonEl) {
 
   const original = buttonEl ? buttonEl.textContent : "";
   if (buttonEl) { buttonEl.disabled = true; buttonEl.textContent = "Kuruluyor..."; }
-  showToast(`📥 ${hit.title || hit.slug} → "${inst.name}" profiline indiriliyor...`, "info");
+  showToast(` ${hit.title || hit.slug} → "${inst.name}" profiline indiriliyor...`, "info");
 
   const payload = {
     slug: hit.slug,
@@ -3867,9 +4450,9 @@ async function pdsInstallSearchHit(hit, buttonEl) {
   const data = await apiPost("/api/modrinth/install", payload, 180000);
 
   if (data && data.needs_confirm) {
-    if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = original || "⚡ Kur"; }
+    if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = original || " Kur"; }
     const ok = await showConfirmDialog({
-      icon: "⚠️",
+      icon: "",
       title: "Sürüm Tam Eşleşmiyor",
       message: `${data.message || "Bu paket sürümünüzle tam eşleşmiyor olabilir."} Yine de indirmek ister misiniz?`,
       okText: "Yine de İndir"
@@ -3885,20 +4468,20 @@ async function pdsInstallSearchHit(hit, buttonEl) {
 }
 
 async function pdsHandleInstallResult(data, buttonEl, original, cat, hit) {
-  if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = original || "⚡ Kur"; }
+  if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = original || " Kur"; }
 
   if (data && data.success) {
     if (data.installed_dependencies || data.failed_dependencies) {
       modInstallToast(String((hit && (hit.title || hit.slug)) || data.filename || "İçerik"), data);
     } else {
-      showToast(`✓ ${data.filename || "İçerik"} profile kuruldu.`, "success");
+      showToast(` ${data.filename || "İçerik"} profile kuruldu.`, "success");
     }
-    if (buttonEl) { buttonEl.disabled = true; buttonEl.textContent = "✓ Yüklü"; }
+    if (buttonEl) { buttonEl.disabled = true; buttonEl.textContent = "Yüklü"; }
     await pdsLoadContent(cat, true);
     if (cat === "mod") pdsLoadMissingDeps();
     loadInstances();
   } else {
-    showToast(`⚠️ ${(data && data.error) || "Kurulum tamamlanamadı."}`, "error");
+    showToast(` ${(data && data.error) || "Kurulum tamamlanamadı."}`, "error");
   }
 }
 
@@ -3917,7 +4500,8 @@ const vswState = {
   loading: false,
   error: "",
   query: "",
-  truncated: false
+  truncated: false,
+  reqId: 0
 };
 
 const VSW_SHOW_INCOMPAT_KEY = "cl_vsw_show_incompatible";
@@ -4046,6 +4630,8 @@ async function openVersionSwitchOverlay(opts = {}, catArg) {
   if (!modal) return;
 
   vswState.open = true;
+  vswState.reqId += 1;
+  const reqId = vswState.reqId;
   vswState.slug = slug;
   vswState.cat = opts.cat || "mod";
   vswState.title = opts.title || slug;
@@ -4062,17 +4648,17 @@ async function openVersionSwitchOverlay(opts = {}, catArg) {
   const iconEl = document.getElementById("vswIcon");
   const searchEl = document.getElementById("vswSearchInput");
 
-  if (titleEl) titleEl.textContent = `⇄ ${vswState.title} — Sürüm Değiştir`;
+  if (titleEl) titleEl.textContent = `${vswState.title} — sürüm değiştir`;
   if (iconEl) {
     iconEl.innerHTML = "";
-    iconEl.textContent = PDS_CAT_INFO[vswState.cat] ? PDS_CAT_INFO[vswState.cat].icon : "🧩";
+    iconEl.textContent = PDS_CAT_INFO[vswState.cat] ? PDS_CAT_INFO[vswState.cat].icon : "";
     if (vswState.iconUrl) {
       const img = document.createElement("img");
       img.src = vswState.iconUrl;
       img.alt = "";
       img.addEventListener("error", () => {
         img.remove();
-        iconEl.textContent = PDS_CAT_INFO[vswState.cat] ? PDS_CAT_INFO[vswState.cat].icon : "🧩";
+        iconEl.textContent = PDS_CAT_INFO[vswState.cat] ? PDS_CAT_INFO[vswState.cat].icon : "";
       });
       iconEl.textContent = "";
       iconEl.appendChild(img);
@@ -4103,7 +4689,7 @@ async function openVersionSwitchOverlay(opts = {}, catArg) {
 
   const params = new URLSearchParams({ slug: slug, instance: vswState.instance.id || "" });
   const data = await apiGet(`/api/modrinth/project?${params.toString()}`, 15000);
-  if (!vswState.open) return;
+  if (!vswState.open || vswState.reqId !== reqId || vswState.slug !== slug) return;
 
   vswState.loading = false;
   if (data && data.success && Array.isArray(data.versions)) {
@@ -4132,7 +4718,7 @@ function vswRenderIncompatEmptyState(emptyEl) {
   emptyEl.style.display = "flex";
   emptyEl.innerHTML = `
     <div class="empty-state empty-state-compact">
-      <div class="empty-state-icon" aria-hidden="true">🧩</div>
+      <div class="empty-state-icon" aria-hidden="true">—</div>
       <h3 class="empty-state-title">Bu profil için uygun sürüm yok</h3>
       <p class="empty-state-desc">${pdsEsc(mc)} • ${pdsEsc(loader)} yapılandırmasıyla uyumlu sürüm bulunamadı.</p>
       <button class="btn btn-primary" type="button" id="vswEmptyShowIncompat">Uyumsuzları göster</button>
@@ -4158,7 +4744,7 @@ function vswRenderList(opts = {}) {
   }
   if (vswState.error) {
     if (empty) empty.style.display = "none";
-    list.innerHTML = `<div class="pds-empty">⚠️ ${pdsEsc(vswState.error)}</div>`;
+    list.innerHTML = `<div class="pds-empty"> ${pdsEsc(vswState.error)}</div>`;
     return;
   }
 
@@ -4241,7 +4827,7 @@ function vswRenderList(opts = {}) {
       <div class="vsw-row-top">
         <span class="vsw-ver">${pdsEsc(v.version_number || v.version_id || "?")}</span>
         <span class="vsw-type vsw-type-${pdsEsc(type)}">${pdsEsc(typeLabel)}</span>
-        ${isInstalled ? '<span class="vsw-installed-tag">✓ Kurulu</span>' : ""}
+        ${isInstalled ? '<span class="vsw-installed-tag">Kurulu</span>' : ""}
       </div>
       <div class="vsw-row-meta" title="${pdsEsc(metaParts.join(" • "))}">${pdsEsc(metaParts.join(" • "))}</div>
     `;
@@ -4254,7 +4840,7 @@ function vswRenderList(opts = {}) {
       btn.type = "button";
       btn.className = "vsw-btn is-installed";
       btn.disabled = true;
-      btn.textContent = "✓ Kurulu";
+      btn.textContent = "Kurulu";
       action.appendChild(btn);
     } else if (compatible) {
       const btn = document.createElement("button");
@@ -4290,14 +4876,14 @@ function vswRenderList(opts = {}) {
   if (vswState.truncated && vswShowIncompatiblePref()) {
     const note = document.createElement("div");
     note.className = "vsw-truncated-note";
-    note.textContent = `ℹ️ Çok fazla sürüm var; en yeni 200 sürüm gösteriliyor.`;
+    note.textContent = `ℹ Çok fazla sürüm var; en yeni 200 sürüm gösteriliyor.`;
     list.appendChild(note);
   }
 
   if (prevScroll !== null) list.scrollTop = prevScroll;
 }
 
-async function vswInstallVersion(version, buttonEl) {
+async function vswInstallVersion(version, buttonEl, force = false) {
   const inst = vswState.instance;
   if (!inst || !version) return;
 
@@ -4312,8 +4898,21 @@ async function vswInstallVersion(version, buttonEl) {
     instance_id: inst.id,
     version_id: version.version_id || "",
     version_number: version.version_number || "",
+    force: force,
     install_dependencies: getInstallDepsPref()
   }, 180000);
+
+  if (data && data.needs_confirm && !force) {
+    if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = original || "Bu sürümü kur"; }
+    const ok = await showConfirmDialog({
+      icon: "!",
+      title: "Sürüm tam eşleşmiyor",
+      message: `${data.message || "Bu sürüm profilinizle tam eşleşmiyor olabilir."} Yine de kurulsun mu?`,
+      okText: "Yine de kur"
+    });
+    if (ok) await vswInstallVersion(version, buttonEl, true);
+    return;
+  }
 
   if (data && data.success) {
     const installed = data.installed || {};
@@ -4322,7 +4921,7 @@ async function vswInstallVersion(version, buttonEl) {
     const transition = oldName && newName && oldName !== newName
       ? `${oldName} → ${newName}`
       : (newName || oldName);
-    showToast(`✓ ${vswState.title || vswState.slug} ${transition}`, "success");
+    showToast(` ${vswState.title || vswState.slug} ${transition}`, "success");
 
     closeVersionSwitchOverlay();
     await refreshInstalledContent();
@@ -4334,7 +4933,7 @@ async function vswInstallVersion(version, buttonEl) {
     loadInstances();
   } else {
     if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = original || "Bu sürümü kur"; }
-    showToast(`⚠️ ${(data && data.error) || "Sürüm değiştirilemedi."}`, "error");
+    showToast(` ${(data && data.error) || "Sürüm değiştirilemedi."}`, "error");
   }
 }
 
@@ -4366,7 +4965,11 @@ function initVersionSwitchModal() {
   }
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && vswState.open) close();
+    if (e.key === "Escape" && vswState.open) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      close();
+    }
   });
 }
 
@@ -4378,7 +4981,7 @@ function pdsRenderVersionTab(pane) {
   pane.innerHTML = `
     <div class="pds-section-head">
       <div>
-        <h3 class="pds-section-title">🧱 Sürüm Bilgisi</h3>
+        <h3 class="pds-section-title"> Sürüm Bilgisi</h3>
         <p class="pds-section-sub">Sürüm/yükleyici değiştirme Faz 2'de; şimdilik bilgileri görüntüleyin ve profili düzenleyin.</p>
       </div>
     </div>
@@ -4390,7 +4993,7 @@ function pdsRenderVersionTab(pane) {
       <div class="pds-info-card"><span class="pds-info-label">Mod Sayısı</span><span class="pds-info-value">${inst.mod_count || 0}</span></div>
     </div>
 
-    <h3 class="pds-section-title pds-sub-head">✏️ Profili Düzenle</h3>
+    <h3 class="pds-section-title pds-sub-head"> Profili Düzenle</h3>
     <div class="pds-form">
       <div class="pds-field">
         <label>Profil Adı</label>
@@ -4400,7 +5003,7 @@ function pdsRenderVersionTab(pane) {
         <label>Profil İkonu (URL)</label>
         <input type="text" class="styled-input" id="pdsVersionIcon" placeholder="https://.../ikon.png" value="${pdsEsc(inst.icon || "")}" autocomplete="off" spellcheck="false">
       </div>
-      <button type="button" class="btn-primary-action" id="pdsVersionSave">💾 Kaydet</button>
+      <button type="button" class="btn-primary-action" id="pdsVersionSave"> Kaydet</button>
     </div>
   `;
 
@@ -4416,7 +5019,7 @@ function pdsRenderSettingsTab(pane) {
   pane.innerHTML = `
     <div class="pds-section-head">
       <div>
-        <h3 class="pds-section-title">⚙️ Ayarlar</h3>
+        <h3 class="pds-section-title"> Ayarlar</h3>
         <p class="pds-section-sub">Profil kimliğini düzenleyin, klasörü açın veya profili silin.</p>
       </div>
     </div>
@@ -4429,7 +5032,7 @@ function pdsRenderSettingsTab(pane) {
         <label>Profil İkonu (URL)</label>
         <input type="text" class="styled-input" id="pdsSettingsIcon" placeholder="https://.../ikon.png" value="${pdsEsc(inst.icon || "")}" autocomplete="off" spellcheck="false">
       </div>
-      <button type="button" class="btn-primary-action" id="pdsSettingsSave">💾 Kaydet</button>
+      <button type="button" class="btn-primary-action" id="pdsSettingsSave"> Kaydet</button>
     </div>
 
     <div class="pds-danger-zone">
@@ -4437,7 +5040,7 @@ function pdsRenderSettingsTab(pane) {
         <strong>Profil klasörü</strong>
         <span>Modlar, dünyalar ve ayarlar bu klasörde saklanır.</span>
       </div>
-      <button type="button" class="btn-secondary" id="pdsOpenFolderBtn">📂 Klasörü Aç</button>
+      <button type="button" class="btn-secondary" id="pdsOpenFolderBtn"> Klasörü Aç</button>
     </div>
 
     <div class="pds-danger-zone pds-danger-red">
@@ -4445,7 +5048,7 @@ function pdsRenderSettingsTab(pane) {
         <strong>Profili Sil</strong>
         <span>Profil ve tüm içeriği kalıcı olarak silinir. Bu işlem geri alınamaz.</span>
       </div>
-      <button type="button" class="pds-btn pds-btn-danger pds-btn-lg" id="pdsDeleteProfileBtn">🗑 Profili Sil</button>
+      <button type="button" class="pds-btn pds-btn-danger pds-btn-lg" id="pdsDeleteProfileBtn"> Profili Sil</button>
     </div>
   `;
 
@@ -4480,15 +5083,15 @@ async function pdsSaveProfileForm(nameId, iconId, buttonEl) {
     icon: iconEl ? iconEl.value.trim() : ""
   }, 12000);
 
-  if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = original || "💾 Kaydet"; }
+  if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = original || " Kaydet"; }
 
   if (data && data.success) {
-    showToast("✓ Profil güncellendi.", "success");
+    showToast(" Profil güncellendi.", "success");
     await loadInstances();
     pdsSyncInstance();
     pdsRenderHeader();
   } else {
-    showToast(`⚠️ ${(data && data.error) || "Profil güncellenemedi."}`, "error");
+    showToast(` ${(data && data.error) || "Profil güncellenemedi."}`, "error");
   }
 }
 
@@ -4497,7 +5100,7 @@ async function pdsDeleteCurrentProfile() {
   if (!inst) return;
 
   const ok = await showConfirmDialog({
-    icon: "🗑️",
+    icon: "",
     title: "Profil Silinsin mi?",
     message: `"${inst.name}" profili ve içindeki tüm mod, dünya ve ayarlar kalıcı olarak silinecek. Emin misiniz?`,
     okText: "Profili Sil",
@@ -4507,11 +5110,11 @@ async function pdsDeleteCurrentProfile() {
 
   const data = await apiPost("/api/instances/delete", { id: pdsState.instanceId }, 30000);
   if (data && data.success) {
-    showToast(`🗑️ "${inst.name}" profili silindi.`, "success");
+    showToast(` "${inst.name}" profili silindi.`, "success");
     closeProfileDetail();
     await loadInstances();
   } else {
-    showToast(`⚠️ ${(data && data.error) || "Profil silinemedi."}`, "error");
+    showToast(` ${(data && data.error) || "Profil silinemedi."}`, "error");
   }
 }
 
@@ -4520,7 +5123,7 @@ function pdsRenderLogsTab(pane) {
   pane.innerHTML = `
     <div class="pds-section-head">
       <div>
-        <h3 class="pds-section-title">📜 Minecraft Günlüğü</h3>
+        <h3 class="pds-section-title"> Minecraft Günlüğü</h3>
         <p class="pds-section-sub">Launcher ve oyunun son günlük kayıtları.</p>
       </div>
       <div class="pds-head-actions">
@@ -4551,13 +5154,13 @@ function pdsRenderLogsTab(pane) {
 
 // ---------- Faz 2/3 sekmeleri ("Yakında") ----------
 function pdsRenderSoonTab(pane, tabId) {
-  const info = PDS_SOON_TABS[tabId] || { label: "Yakında", icon: "🧭", folder: "", desc: "" };
+  const info = PDS_SOON_TABS[tabId] || { label: "Yakında", icon: "", folder: "", desc: "" };
   pane.innerHTML = `
     <div class="pds-soon">
       <div class="pds-soon-icon">${info.icon}</div>
       <h3 class="pds-soon-title">${pdsEsc(info.label)} — Yakında</h3>
       <p class="pds-soon-desc">${pdsEsc(info.desc)}</p>
-      <button type="button" class="btn-secondary" id="pdsSoonFolder">📂 Klasörü Aç</button>
+      <button type="button" class="btn-secondary" id="pdsSoonFolder"> Klasörü Aç</button>
     </div>
   `;
   const btn = document.getElementById("pdsSoonFolder");
@@ -4649,6 +5252,7 @@ async function pdsLoadShaderStore() {
   pdsState.store.loading = true;
   pdsState.store.searched = true;
   pdsState.store.error = "";
+  const reqId = ++pdsState.store.reqId;
   pdsRenderShaderStore();
 
   const params = new URLSearchParams({
@@ -4661,6 +5265,7 @@ async function pdsLoadShaderStore() {
   });
 
   const data = await apiGet(`/api/modrinth/search?${params.toString()}`, 20000);
+  if (reqId !== pdsState.store.reqId) return;
   pdsState.store.loading = false;
 
   if (!data || data.error || !Array.isArray(data.hits)) {
@@ -4686,7 +5291,7 @@ function pdsRenderShaderStore() {
     return;
   }
   if (st.error) {
-    wrap.innerHTML = `<div class="pds-empty">⚠️ ${pdsEsc(st.error)}</div>`;
+    wrap.innerHTML = `<div class="pds-empty"> ${pdsEsc(st.error)}</div>`;
     return;
   }
   if (!st.searched) {
@@ -4720,27 +5325,27 @@ function pdsRenderShaderStore() {
           img.src = hit.icon_url;
         } else {
           img.remove();
-          hero.textContent = "✨";
+          hero.textContent = "S";
         }
       });
       hero.appendChild(img);
     } else {
-      hero.textContent = "✨";
+      hero.textContent = "S";
     }
 
     const hint = document.createElement("span");
     hint.className = "pds-store-hint";
-    hint.textContent = "ℹ️";
+    hint.textContent = "ℹ";
     hint.title = "Oyun içinde Iris/OptiFine menüsünden seçilir";
     hint.addEventListener("click", (e) => {
       e.stopPropagation();
-      showToast("ℹ️ Shader'ı oyun içinde Iris/OptiFine menüsünden seçin.", "info");
+      showToast("ℹ Shader'ı oyun içinde Iris/OptiFine menüsünden seçin.", "info");
     });
     hero.appendChild(hint);
     if (installed) {
       const badge = document.createElement("span");
       badge.className = "pds-store-badge";
-      badge.textContent = "Kuruldu ✓";
+      badge.textContent = "Kuruldu ";
       hero.appendChild(badge);
     }
 
@@ -4754,8 +5359,8 @@ function pdsRenderShaderStore() {
       <div class="pds-store-name" title="${pdsEsc(hit.title)}">${pdsEsc(hit.title || hit.slug)}</div>
       <div class="pds-store-desc">${pdsEsc(hit.description || "Açıklama bulunmuyor.")}</div>
       <div class="pds-store-meta">
-        <span>⬇ ${Number(hit.downloads || 0).toLocaleString()}</span>
-        ${hit.author ? `<span>👤 ${pdsEsc(hit.author)}</span>` : ""}
+        <span> ${Number(hit.downloads || 0).toLocaleString()}</span>
+        ${hit.author ? `<span> ${pdsEsc(hit.author)}</span>` : ""}
       </div>
       <div class="pds-store-chips">${cats.slice(0, 3).map(c => `<span class="pds-chip">${pdsEsc(c)}</span>`).join("")}</div>
     `;
@@ -4765,7 +5370,7 @@ function pdsRenderShaderStore() {
     const installBtn = document.createElement("button");
     installBtn.type = "button";
     installBtn.className = "pds-btn pds-btn-primary pds-store-install";
-    installBtn.textContent = installed ? "Kuruldu ✓" : "⬇ Kur";
+    installBtn.textContent = installed ? "Kuruldu " : "Kur";
     if (installed) {
       installBtn.disabled = true;
       installBtn.classList.add("is-installed");
@@ -4802,7 +5407,7 @@ async function pdsInstallShader(hit, buttonEl) {
 
   const original = buttonEl ? buttonEl.textContent : "";
   if (buttonEl) { buttonEl.disabled = true; buttonEl.textContent = "Kuruluyor..."; }
-  showToast(`📥 ${hit.title || hit.slug} → "${inst.name}" profiline indiriliyor...`, "info");
+  showToast(` ${hit.title || hit.slug} → "${inst.name}" profiline indiriliyor...`, "info");
 
   const payload = {
     slug: hit.slug,
@@ -4815,9 +5420,9 @@ async function pdsInstallShader(hit, buttonEl) {
   const data = await apiPost("/api/modrinth/install", payload, 180000);
 
   if (data && data.needs_confirm) {
-    if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = original || "⬇ Kur"; }
+    if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = original || "Kur"; }
     const ok = await showConfirmDialog({
-      icon: "⚠️",
+      icon: "",
       title: "Sürüm Tam Eşleşmiyor",
       message: `${data.message || "Bu shader sürümünüzle tam eşleşmiyor olabilir."} Yine de indirmek ister misiniz?`,
       okText: "Yine de İndir"
@@ -4834,10 +5439,10 @@ async function pdsInstallShader(hit, buttonEl) {
 
 async function pdsHandleShaderInstallResult(data, hit, buttonEl, original) {
   if (data && data.success) {
-    showToast(`✓ ${data.filename || hit.slug} shaderpacks klasörüne kuruldu.`, "success");
+    showToast(` ${data.filename || hit.slug} shaderpacks klasörüne kuruldu.`, "success");
     if (buttonEl) {
       buttonEl.disabled = true;
-      buttonEl.textContent = "Kuruldu ✓";
+      buttonEl.textContent = "Kuruldu ";
       buttonEl.classList.add("is-installed");
     }
     pdsState.store.installed.add(String(hit.slug || "").trim().toLowerCase());
@@ -4848,9 +5453,9 @@ async function pdsHandleShaderInstallResult(data, hit, buttonEl, original) {
   } else {
     if (buttonEl) {
       buttonEl.disabled = false;
-      buttonEl.textContent = original || "⬇ Kur";
+      buttonEl.textContent = original || "Kur";
     }
-    showToast(`⚠️ ${(data && data.error) || "Shader kurulamadı."}`, "error");
+    showToast(` ${(data && data.error) || "Shader kurulamadı."}`, "error");
   }
 }
 
@@ -4862,7 +5467,7 @@ async function pdsCopyText(text) {
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       await navigator.clipboard.writeText(text);
-      showToast(`📋 Kopyalandı: ${text}`, "success");
+      showToast(` Kopyalandı: ${text}`, "success");
       return;
     }
   } catch (_) {}
@@ -4875,7 +5480,7 @@ async function pdsCopyText(text) {
     ta.select();
     document.execCommand("copy");
     ta.remove();
-    showToast(`📋 Kopyalandı: ${text}`, "success");
+    showToast(` Kopyalandı: ${text}`, "success");
   } catch (_) {
     showToast("Kopyalanamadı.", "error");
   }
@@ -4887,19 +5492,19 @@ async function pdsRenderNotesTab(pane) {
   pane.innerHTML = `
     <div class="pds-section-head">
       <div>
-        <h3 class="pds-section-title">📝 Notlar</h3>
+        <h3 class="pds-section-title"> Notlar</h3>
         <p class="pds-section-sub">"${pdsEsc(inst ? inst.name : "Profil")}" için not defteri (note.txt). Yazarken otomatik kaydedilir.</p>
       </div>
       <div class="pds-head-actions">
         <span class="pds-note-status" id="pdsNoteStatus"></span>
-        <button type="button" class="btn-secondary" id="pdsNoteFolder">📂 Klasörü Aç</button>
+        <button type="button" class="btn-secondary" id="pdsNoteFolder"> Klasörü Aç</button>
       </div>
     </div>
     <div class="pds-note-wrap">
       <textarea class="pds-note-area" id="pdsNoteArea" placeholder="Bu profile dair notlarınız..." spellcheck="false"></textarea>
       <div class="pds-note-foot">
         <span class="pds-note-count" id="pdsNoteCount">0 karakter</span>
-        <button type="button" class="btn-primary-action" id="pdsNoteSave">💾 Kaydet</button>
+        <button type="button" class="btn-primary-action" id="pdsNoteSave"> Kaydet</button>
       </div>
     </div>
   `;
@@ -4922,7 +5527,7 @@ async function pdsRenderNotesTab(pane) {
       pdsState.note.pending = data.content || "";
       if (status) status.textContent = data.exists ? "Yüklendi" : "Yeni not";
     } else if (status) {
-      status.textContent = "⚠️ Not alınamadı";
+      status.textContent = " Not alınamadı";
     }
   } else if (area) {
     area.value = pdsState.note.lastSaved || "";
@@ -4960,20 +5565,38 @@ async function pdsRenderNotesTab(pane) {
 }
 
 async function pdsSaveNote(content, statusEl) {
+  const instanceId = String(pdsState.instanceId || "");
+  if (!instanceId) return;
+
+  // Son içeriği kuyruğa al. Devam eden bir kayıt varsa, o kayıt bitince
+  // en güncel metni tekrar yazar; böylece yazarken oluşan kayıp önlenir.
+  pdsState.note.queued = content;
   if (pdsState.note.saving) return;
+
   pdsState.note.saving = true;
   if (statusEl) statusEl.textContent = "Kaydediliyor...";
-  const data = await apiPost("/api/instances/note", {
-    instance: pdsState.instanceId,
-    content: content
-  }, 12000);
-  pdsState.note.saving = false;
-  if (data && data.success) {
-    pdsState.note.lastSaved = content;
-    pdsState.note.pending = content;
-    if (statusEl) statusEl.textContent = "✓ Kaydedildi";
-  } else if (statusEl) {
-    statusEl.textContent = `⚠️ ${(data && data.error) || "Kaydedilemedi"}`;
+  try {
+    while (pdsState.note.queued !== null) {
+      if (String(pdsState.instanceId || "") !== instanceId) break;
+      const payload = pdsState.note.queued;
+      pdsState.note.queued = null;
+      const data = await apiPost("/api/instances/note", {
+        instance: instanceId,
+        content: payload
+      }, 12000);
+      if (String(pdsState.instanceId || "") !== instanceId) break;
+      if (data && data.success) {
+        pdsState.note.lastSaved = payload;
+        pdsState.note.pending = payload;
+        if (statusEl) statusEl.textContent = "Kaydedildi";
+      } else {
+        pdsState.note.queued = payload;
+        if (statusEl) statusEl.textContent = `Hata: ${(data && data.error) || "Kaydedilemedi"}`;
+        break;
+      }
+    }
+  } finally {
+    pdsState.note.saving = false;
   }
 }
 
@@ -4987,12 +5610,12 @@ async function pdsRenderWorldsTab(pane) {
   pane.innerHTML = `
     <div class="pds-section-head">
       <div>
-        <h3 class="pds-section-title">🌍 Dünyalar</h3>
+        <h3 class="pds-section-title"> Dünyalar</h3>
         <p class="pds-section-sub">Bu profildeki kayıtlı dünyalar. Kopyalayın veya silin.</p>
       </div>
       <div class="pds-head-actions">
         <button type="button" class="btn-secondary" id="pdsWorldsRefresh">↻ Yenile</button>
-        <button type="button" class="btn-secondary" id="pdsWorldsFolder">📂 Klasörü Aç</button>
+        <button type="button" class="btn-secondary" id="pdsWorldsFolder"> Klasörü Aç</button>
       </div>
     </div>
     <div class="pds-asset-list" id="pdsWorldsList">
@@ -5013,9 +5636,11 @@ async function pdsLoadWorlds(force) {
   if (!wrap) return;
   if (!force && pdsState.worlds !== null) return pdsRenderWorlds();
 
-  const data = await apiGet(`/api/instances/worlds?instance=${encodeURIComponent(pdsState.instanceId)}`, 20000);
+  const instanceId = String(pdsState.instanceId || "");
+  const data = await apiGet(`/api/instances/worlds?instance=${encodeURIComponent(instanceId)}`, 20000);
+  if (String(pdsState.instanceId || "") !== instanceId) return;
   if (!data || data.success !== true) {
-    wrap.innerHTML = `<div class="pds-empty">⚠️ ${pdsEsc((data && data.error) || "Dünya listesi alınamadı.")}</div>`;
+    wrap.innerHTML = `<div class="pds-empty"> ${pdsEsc((data && data.error) || "Dünya listesi alınamadı.")}</div>`;
     return;
   }
   pdsState.worlds = Array.isArray(data.worlds) ? data.worlds : [];
@@ -5027,7 +5652,7 @@ function pdsRenderWorlds() {
   if (!wrap) return;
   const worlds = pdsState.worlds || [];
   if (worlds.length === 0) {
-    wrap.innerHTML = `<div class="pds-empty">🌍 Henüz dünya yok.<br>Oyun içinden yeni bir dünya oluşturabilirsiniz.</div>`;
+    wrap.innerHTML = `<div class="pds-empty"> Henüz dünya yok.<br>Oyun içinden yeni bir dünya oluşturabilirsiniz.</div>`;
     return;
   }
 
@@ -5038,14 +5663,14 @@ function pdsRenderWorlds() {
 
     const icon = document.createElement("div");
     icon.className = "pds-asset-icon";
-    icon.textContent = "🌍";
+    icon.textContent = "W";
     if (w.has_icon) {
       const img = document.createElement("img");
       img.alt = "";
       img.loading = "lazy";
       img.src = pdsWorldIconUrl(w.name);
-      img.addEventListener("error", () => { img.remove(); icon.textContent = "🌍"; });
-      icon.textContent = "";
+      img.addEventListener("error", () => { img.remove(); icon.textContent = "W"; });
+      icon.textContent = "W";
       icon.appendChild(img);
     }
 
@@ -5062,21 +5687,21 @@ function pdsRenderWorlds() {
     const openBtn = document.createElement("button");
     openBtn.type = "button";
     openBtn.className = "pds-btn";
-    openBtn.textContent = "📂";
+    openBtn.textContent = "Klasör";
     openBtn.title = "Klasörü Aç";
     openBtn.addEventListener("click", () => openSystemFolder(`instances/${pdsState.instanceId}/saves/${w.name}`));
 
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.className = "pds-btn";
-    copyBtn.textContent = "📋 Kopyala";
+    copyBtn.textContent = "Kopyala";
     copyBtn.title = "Dünyayı çoğalt";
     copyBtn.addEventListener("click", () => pdsCopyWorld(w, copyBtn));
 
     const delBtn = document.createElement("button");
     delBtn.type = "button";
     delBtn.className = "pds-btn pds-btn-danger";
-    delBtn.textContent = "🗑";
+    delBtn.textContent = "Sil";
     delBtn.title = "Sil";
     delBtn.addEventListener("click", () => pdsDeleteWorld(w));
 
@@ -5091,7 +5716,7 @@ function pdsRenderWorlds() {
 }
 
 async function pdsCopyWorld(world, buttonEl) {
-  const original = buttonEl ? buttonEl.textContent : "📋 Kopyala";
+  const original = buttonEl ? buttonEl.textContent : " Kopyala";
   if (buttonEl) { buttonEl.disabled = true; buttonEl.textContent = "Kopyalanıyor..."; }
   const data = await apiPost("/api/instances/world/copy", {
     instance: pdsState.instanceId,
@@ -5100,16 +5725,16 @@ async function pdsCopyWorld(world, buttonEl) {
   if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = original; }
 
   if (data && data.success) {
-    showToast(`📋 Dünya kopyalandı: ${data.name}`, "success");
+    showToast(` Dünya kopyalandı: ${data.name}`, "success");
     await pdsLoadWorlds(true);
   } else {
-    showToast(`⚠️ ${(data && data.error) || "Dünya kopyalanamadı."}`, "error");
+    showToast(` ${(data && data.error) || "Dünya kopyalanamadı."}`, "error");
   }
 }
 
 async function pdsDeleteWorld(world) {
   const ok = await showConfirmDialog({
-    icon: "🗑️",
+    icon: "",
     title: "Dünya Silinsin mi?",
     message: `"${world.name}" dünyası ve içindeki tüm kayıtlar kalıcı olarak silinecek. Bu işlem geri alınamaz.`,
     okText: "Sil",
@@ -5122,10 +5747,10 @@ async function pdsDeleteWorld(world) {
     world: world.name
   }, 30000);
   if (data && data.success) {
-    showToast(`🗑️ ${world.name} silindi.`, "success");
+    showToast(` ${world.name} silindi.`, "success");
     await pdsLoadWorlds(true);
   } else {
-    showToast(`⚠️ ${(data && data.error) || "Dünya silinemedi."}`, "error");
+    showToast(` ${(data && data.error) || "Dünya silinemedi."}`, "error");
   }
 }
 
@@ -5134,12 +5759,12 @@ async function pdsRenderServersTab(pane) {
   pane.innerHTML = `
     <div class="pds-section-head">
       <div>
-        <h3 class="pds-section-title">🌐 Sunucular</h3>
+        <h3 class="pds-section-title"> Sunucular</h3>
         <p class="pds-section-sub">servers.dat içindeki kayıtlı sunucular (oyun içinden eklenir).</p>
       </div>
       <div class="pds-head-actions">
         <button type="button" class="btn-secondary" id="pdsServersRefresh">↻ Yenile</button>
-        <button type="button" class="btn-secondary" id="pdsServersFolder">📂 Klasörü Aç</button>
+        <button type="button" class="btn-secondary" id="pdsServersFolder"> Klasörü Aç</button>
       </div>
     </div>
     <div class="pds-asset-list" id="pdsServersList">
@@ -5160,9 +5785,11 @@ async function pdsLoadServers(force) {
   if (!wrap) return;
   if (!force && pdsState.servers !== null) return pdsRenderServers();
 
-  const data = await apiGet(`/api/instances/servers?instance=${encodeURIComponent(pdsState.instanceId)}`, 15000);
+  const instanceId = String(pdsState.instanceId || "");
+  const data = await apiGet(`/api/instances/servers?instance=${encodeURIComponent(instanceId)}`, 15000);
+  if (String(pdsState.instanceId || "") !== instanceId) return;
   if (!data || data.success !== true) {
-    wrap.innerHTML = `<div class="pds-empty">⚠️ ${pdsEsc((data && data.error) || "Sunucu listesi alınamadı.")}</div>`;
+    wrap.innerHTML = `<div class="pds-empty"> ${pdsEsc((data && data.error) || "Sunucu listesi alınamadı.")}</div>`;
     return;
   }
   pdsState.servers = Array.isArray(data.servers) ? data.servers : [];
@@ -5174,7 +5801,7 @@ function pdsRenderServers() {
   if (!wrap) return;
   const servers = pdsState.servers || [];
   if (servers.length === 0) {
-    wrap.innerHTML = `<div class="pds-empty">🌐 Sunucu listesi boş (oyun içinden eklenir).</div>`;
+    wrap.innerHTML = `<div class="pds-empty"> Sunucu listesi boş (oyun içinden eklenir).</div>`;
     return;
   }
 
@@ -5185,7 +5812,7 @@ function pdsRenderServers() {
 
     const icon = document.createElement("div");
     icon.className = "pds-asset-icon";
-    icon.textContent = "🌐";
+    icon.textContent = "W";
 
     const info = document.createElement("div");
     info.className = "pds-asset-info";
@@ -5200,7 +5827,7 @@ function pdsRenderServers() {
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.className = "pds-btn";
-    copyBtn.textContent = "📋 IP'yi Kopyala";
+    copyBtn.textContent = " IP'yi Kopyala";
     copyBtn.addEventListener("click", () => pdsCopyText(srv.ip || ""));
 
     actions.appendChild(copyBtn);
@@ -5221,12 +5848,12 @@ async function pdsRenderProfileShotsTab(pane) {
   pane.innerHTML = `
     <div class="pds-section-head">
       <div>
-        <h3 class="pds-section-title">📸 Ekran Görüntüleri</h3>
+        <h3 class="pds-section-title"> Ekran Görüntüleri</h3>
         <p class="pds-section-sub">Bu profilde alınan ekran görüntüleri (screenshots/).</p>
       </div>
       <div class="pds-head-actions">
         <button type="button" class="btn-secondary" id="pdsShotsRefresh">↻ Yenile</button>
-        <button type="button" class="btn-secondary" id="pdsShotsFolder">📂 Klasörü Aç</button>
+        <button type="button" class="btn-secondary" id="pdsShotsFolder"> Klasörü Aç</button>
       </div>
     </div>
     <div class="pds-shot-grid" id="pdsShotsGrid">
@@ -5247,9 +5874,11 @@ async function pdsLoadProfileShots(force) {
   if (!wrap) return;
   if (!force && pdsState.shots !== null) return pdsRenderProfileShots();
 
-  const data = await apiGet(`/api/instances/screenshots?instance=${encodeURIComponent(pdsState.instanceId)}`, 15000);
+  const instanceId = String(pdsState.instanceId || "");
+  const data = await apiGet(`/api/instances/screenshots?instance=${encodeURIComponent(instanceId)}`, 15000);
+  if (String(pdsState.instanceId || "") !== instanceId) return;
   if (!data || data.success !== true) {
-    wrap.innerHTML = `<div class="pds-empty" style="grid-column: 1/-1;">⚠️ ${pdsEsc((data && data.error) || "Ekran görüntüleri alınamadı.")}</div>`;
+    wrap.innerHTML = `<div class="pds-empty" style="grid-column: 1/-1;"> ${pdsEsc((data && data.error) || "Ekran görüntüleri alınamadı.")}</div>`;
     return;
   }
   pdsState.shots = Array.isArray(data.screenshots) ? data.screenshots : [];
@@ -5261,7 +5890,7 @@ function pdsRenderProfileShots() {
   if (!wrap) return;
   const shots = pdsState.shots || [];
   if (shots.length === 0) {
-    wrap.innerHTML = `<div class="pds-empty" style="grid-column: 1/-1;">📸 Henüz ekran görüntüsü yok.<br>Oyunda F2 tuşuna basarak alabilirsiniz.</div>`;
+    wrap.innerHTML = `<div class="pds-empty" style="grid-column: 1/-1;"> Henüz ekran görüntüsü yok.<br>Oyunda F2 tuşuna basarak alabilirsiniz.</div>`;
     return;
   }
 
@@ -5278,7 +5907,7 @@ function pdsRenderProfileShots() {
       </div>
     `;
     const img = card.querySelector("img");
-    if (img) img.addEventListener("error", () => { img.remove(); card.querySelector(".pds-shot-thumb").textContent = "📸"; });
+    if (img) img.addEventListener("error", () => { img.remove(); card.querySelector(".pds-shot-thumb").textContent = "S"; });
     card.addEventListener("click", () => pdsOpenLightbox(url));
     wrap.appendChild(card);
   });
@@ -5308,12 +5937,12 @@ async function pdsRenderOtherLogsTab(pane) {
   pane.innerHTML = `
     <div class="pds-section-head">
       <div>
-        <h3 class="pds-section-title">🗄️ Diğer Kayıtlar</h3>
+        <h3 class="pds-section-title"> Diğer Kayıtlar</h3>
         <p class="pds-section-sub">crash-reports ve logs klasöründeki kayıt dosyaları. Son 200 satır görüntülenebilir.</p>
       </div>
       <div class="pds-head-actions">
         <button type="button" class="btn-secondary" id="pdsOtherRefresh">↻ Yenile</button>
-        <button type="button" class="btn-secondary" id="pdsOtherFolder">📂 Klasörü Aç</button>
+        <button type="button" class="btn-secondary" id="pdsOtherFolder"> Klasörü Aç</button>
       </div>
     </div>
     <div class="pds-asset-list" id="pdsOtherLogsList">
@@ -5334,9 +5963,11 @@ async function pdsLoadOtherLogs(force) {
   if (!wrap) return;
   if (!force && pdsState.otherLogs !== null) return pdsRenderOtherLogs();
 
-  const data = await apiGet(`/api/instances/logs?instance=${encodeURIComponent(pdsState.instanceId)}`, 15000);
+  const instanceId = String(pdsState.instanceId || "");
+  const data = await apiGet(`/api/instances/logs?instance=${encodeURIComponent(instanceId)}`, 15000);
+  if (String(pdsState.instanceId || "") !== instanceId) return;
   if (!data || data.success !== true) {
-    wrap.innerHTML = `<div class="pds-empty">⚠️ ${pdsEsc((data && data.error) || "Kayıt listesi alınamadı.")}</div>`;
+    wrap.innerHTML = `<div class="pds-empty"> ${pdsEsc((data && data.error) || "Kayıt listesi alınamadı.")}</div>`;
     return;
   }
   pdsState.otherLogs = Array.isArray(data.files) ? data.files : [];
@@ -5348,7 +5979,7 @@ function pdsRenderOtherLogs() {
   if (!wrap) return;
   const files = pdsState.otherLogs || [];
   if (files.length === 0) {
-    wrap.innerHTML = `<div class="pds-empty">🗄️ Kayıt dosyası yok.</div>`;
+    wrap.innerHTML = `<div class="pds-empty"> Kayıt dosyası yok.</div>`;
     return;
   }
 
@@ -5359,7 +5990,7 @@ function pdsRenderOtherLogs() {
 
     const icon = document.createElement("div");
     icon.className = "pds-asset-icon";
-    icon.textContent = f.dir === "crash-reports" ? "💥" : "📄";
+    icon.textContent = f.dir === "crash-reports" ? "" : "";
 
     const info = document.createElement("div");
     info.className = "pds-asset-info";
@@ -5374,13 +6005,13 @@ function pdsRenderOtherLogs() {
     const viewBtn = document.createElement("button");
     viewBtn.type = "button";
     viewBtn.className = "pds-btn";
-    viewBtn.textContent = "👁 Görüntüle";
+    viewBtn.textContent = " Görüntüle";
     viewBtn.addEventListener("click", () => pdsOpenLogViewer(f));
 
     const folderBtn = document.createElement("button");
     folderBtn.type = "button";
     folderBtn.className = "pds-btn";
-    folderBtn.textContent = "📂";
+    folderBtn.textContent = "Klasör";
     folderBtn.title = "Klasörü Aç";
     folderBtn.addEventListener("click", () => openSystemFolder(`instances/${pdsState.instanceId}/${f.dir}`));
 
@@ -5399,12 +6030,12 @@ async function pdsOpenLogViewer(file) {
   pane.innerHTML = `
     <div class="pds-section-head">
       <div>
-        <h3 class="pds-section-title">📄 ${pdsEsc(file.name)}</h3>
+        <h3 class="pds-section-title"> ${pdsEsc(file.name)}</h3>
         <p class="pds-section-sub">${pdsEsc(file.dir)}/ • son 200 satır</p>
       </div>
       <div class="pds-head-actions">
         <button type="button" class="btn-secondary" id="pdsLogViewerBack">← Geri</button>
-        <button type="button" class="btn-secondary" id="pdsLogViewerFolder">📂 Klasörü Aç</button>
+        <button type="button" class="btn-secondary" id="pdsLogViewerFolder"> Klasörü Aç</button>
       </div>
     </div>
     <pre class="pds-log" id="pdsLogViewerOut">Kayıt yükleniyor...</pre>
@@ -5426,6 +6057,6 @@ async function pdsOpenLogViewer(file) {
     out.textContent = data.lines.length ? data.lines.join("\n") : "Kayıt boş.";
     out.scrollTop = out.scrollHeight;
   } else {
-    out.textContent = `⚠️ ${(data && data.error) || "Kayıt okunamadı."}`;
+    out.textContent = ` ${(data && data.error) || "Kayıt okunamadı."}`;
   }
 }

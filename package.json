@@ -1,7 +1,7 @@
 {
   "name": "cookie-launcher",
-  "version": "3.0.0",
-  "description": "Ultra-aesthetic, optimized Minecraft Launcher in Tauri",
+  "version": "3.1.0",
+  "description": "Cookie Launcher — optimized Minecraft: Java Edition launcher in Tauri",
   "scripts": {
     "dev": "python3 backend/server.py",
     "tauri": "tauri",

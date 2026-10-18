@@ -3,91 +3,108 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CookieLauncher 🍪</title>
+  <title>CookieLauncher</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!-- =================== BAŞLIK ÇUBUĞU (TITLEBAR) — ince, 40px =================== -->
-  <header class="titlebar" data-tauri-drag-region="deep">
-    <div class="titlebar-left" data-tauri-drag-region="deep">
-      <!-- Hızlı Klasörler Menüsü -->
+  <!-- =================== BAŞLIK ÇUBUĞU (TITLEBAR) =================== -->
+  <header class="titlebar">
+    <div class="titlebar-left">
+      <span class="titlebar-name">COOKIE<span class="titlebar-slash">/</span>LAUNCHER</span>
+      <span class="titlebar-tag">JAVA EDITION</span>
       <div class="quick-dropdown">
         <button class="btn-titlebar-action" id="btnQuickFolders" aria-haspopup="true" aria-expanded="false">
-          <span>📁 Klasörler ▾</span>
+          <span>Klasörler</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
         <div class="dropdown-menu" id="quickFoldersMenu" role="menu">
-          <button class="dropdown-item" role="menuitem" data-folder="">📂 .minecraft Ana Klasörü</button>
-          <button class="dropdown-item" role="menuitem" data-folder="mods">🧩 mods Klasörü</button>
-          <button class="dropdown-item" role="menuitem" data-folder="instances">⚡ instances (Profiller)</button>
-          <button class="dropdown-item" role="menuitem" data-folder="saves">💾 saves (Dünyalar)</button>
-          <button class="dropdown-item" role="menuitem" data-folder="screenshots">📸 screenshots Klasörü</button>
-          <button class="dropdown-item" role="menuitem" data-folder="crash-reports">⚠️ crash-reports Klasörü</button>
+          <button class="dropdown-item" role="menuitem" data-folder="">.minecraft ana klasörü</button>
+          <button class="dropdown-item" role="menuitem" data-folder="mods">mods klasörü</button>
+          <button class="dropdown-item" role="menuitem" data-folder="instances">instances (profiller)</button>
+          <button class="dropdown-item" role="menuitem" data-folder="saves">saves (dünyalar)</button>
+          <button class="dropdown-item" role="menuitem" data-folder="screenshots">screenshots klasörü</button>
+          <button class="dropdown-item" role="menuitem" data-folder="crash-reports">crash-reports klasörü</button>
         </div>
       </div>
     </div>
 
-    <!-- Sürükleme alanı (marka artık sol rail'de) -->
     <div class="titlebar-drag" data-tauri-drag-region="deep"></div>
 
-    <!-- Pencere Kontrolleri -->
     <div class="titlebar-controls">
-      <button class="control-btn" id="btnWinMinimize" title="Simge Durumuna Küçült" aria-label="Simge durumuna küçült">−</button>
-      <button class="control-btn" id="btnWinMaximize" title="Ekranı Kapla" aria-label="Ekranı kapla">□</button>
-      <button class="control-btn btn-close" id="btnWinClose" title="Kapat" aria-label="Kapat">✕</button>
+      <button class="control-btn" id="btnWinMinimize" title="Simge Durumuna Küçült" aria-label="Simge durumuna küçült">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14"/></svg>
+      </button>
+      <button class="control-btn" id="btnWinMaximize" title="Ekranı Kapla" aria-label="Ekranı kapla">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1"/></svg>
+      </button>
+      <button class="control-btn btn-close" id="btnWinClose" title="Kapat" aria-label="Kapat">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
     </div>
   </header>
 
-  <!-- =================== ANA DÜZEN: KALICI SOL RAIL + İÇERİK =================== -->
+  <!-- =================== ANA DÜZEN: SOL RAIL + İÇERİK =================== -->
   <div class="app-layout">
-    <!-- Kalıcı Sol Dikey Rail (Sidebar) -->
     <nav class="rail" id="mainRail" aria-label="Ana gezinme">
-      <!-- Marka -->
       <div class="rail-brand">
-        <img src="cookie-logo.png" alt="" class="rail-logo" onerror="this.style.display='none'">
+        <div class="rail-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none">
+            <circle cx="24" cy="24" r="19" fill="currentColor" opacity=".14"/>
+            <circle cx="24" cy="24" r="19" stroke="currentColor" stroke-width="2"/>
+            <circle cx="17" cy="19" r="2.4" fill="currentColor"/>
+            <circle cx="27" cy="15" r="2" fill="currentColor"/>
+            <circle cx="32" cy="24" r="2.6" fill="currentColor"/>
+            <circle cx="25" cy="31" r="2.2" fill="currentColor"/>
+            <circle cx="15" cy="29" r="1.8" fill="currentColor"/>
+          </svg>
+        </div>
         <div class="rail-brand-text">
           <span class="rail-brand-name">Cookie Launcher</span>
-          <span class="rail-version">v3.0.0</span>
+          <span class="rail-version">v3.1.0</span>
         </div>
       </div>
 
-      <!-- Ana Menü -->
       <div class="rail-menu" role="tablist" aria-orientation="vertical" aria-label="Bölümler">
         <button class="nav-tab active" data-tab="tab-play" role="tab" aria-selected="true" aria-current="page" title="Oyna">
           <span class="nav-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="10" y1="12" y2="12"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="15" x2="15.01" y1="13" y2="13"/><line x1="18" x2="18.01" y1="11" y2="11"/><rect width="20" height="12" x="2" y="6" rx="6"/></svg>
           </span>
           <span class="nav-label">Oyna</span>
+          <span class="nav-key">1</span>
         </button>
         <button class="nav-tab" data-tab="tab-instances" role="tab" aria-selected="false" title="Profiller">
           <span class="nav-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
           </span>
           <span class="nav-label">Profiller</span>
+          <span class="nav-key">2</span>
         </button>
         <button class="nav-tab" data-tab="tab-modrinth" role="tab" aria-selected="false" title="Modlar &amp; Paketler">
           <span class="nav-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.077.877.528 1.073 1.01a2.5 2.5 0 1 0 3.259-3.259c-.482-.196-.933-.558-1.01-1.073-.05-.336.062-.676.303-.917l1.525-1.525A2.402 2.402 0 0 1 12 1.998c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.967 1.02Z"/></svg>
           </span>
-          <span class="nav-label">Modlar &amp; Paketler</span>
+          <span class="nav-label">Modlar</span>
+          <span class="nav-key">3</span>
         </button>
         <button class="nav-tab" data-tab="tab-gallery" role="tab" aria-selected="false" title="Galeri">
           <span class="nav-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
           </span>
           <span class="nav-label">Galeri</span>
+          <span class="nav-key">4</span>
         </button>
         <button class="nav-tab" data-tab="tab-console" role="tab" aria-selected="false" title="Konsol">
           <span class="nav-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
           </span>
           <span class="nav-label">Konsol</span>
+          <span class="nav-key">5</span>
         </button>
       </div>
 
-      <!-- Alt: Aktif Profil Mini Kartı + Çekirdek Durumu -->
       <div class="rail-bottom">
         <div class="rail-profile" id="railProfileCard" title="Aktif profil">
-          <div class="rail-profile-icon" id="railProfileIcon">🗂️</div>
+          <div class="rail-profile-icon" id="railProfileIcon">?</div>
           <div class="rail-profile-text">
             <span class="rail-profile-name" id="railProfileName">Profil yok</span>
             <span class="rail-profile-meta" id="railProfileMeta">MC • —</span>
@@ -95,25 +112,27 @@
         </div>
         <div class="connection-status" id="railCoreStatus" data-state="ready">
           <span class="status-indicator" aria-hidden="true"></span>
-          <span id="engineStatusText">Core Hazır</span>
+          <span id="engineStatusText">Core hazır</span>
         </div>
+        <button class="rail-shortcuts" id="btnShowShortcuts" type="button" title="Klavye kısayolları">
+          <span>Kısayollar</span><kbd>?</kbd>
+        </button>
       </div>
     </nav>
 
-    <!-- İçerik Alanı -->
     <main class="main-content">
-
-      <!-- =================== SEKME 1: OYNA (HERO DÜZENİ) =================== -->
+      <!-- =================== SEKME 1: OYNA =================== -->
       <section class="tab-pane active" id="tab-play">
         <div class="play-layout">
-
-          <!-- SOL: HERO PROFİL PANELİ + DEV BAŞLAT BUTONU -->
           <div class="play-main">
             <div class="panel hero-panel" id="heroPanel">
+              <div class="hero-topline">
+                <span class="eyebrow">Aktif profil</span>
+                <span class="hero-status" id="heroStatusBadge">Hazır</span>
+              </div>
               <div class="hero-profile">
-                <div class="hero-avatar" id="heroProfileIcon" aria-hidden="true">🗂️</div>
+                <div class="hero-avatar" id="heroProfileIcon" aria-hidden="true">?</div>
                 <div class="hero-info">
-                  <span class="hero-eyebrow">Aktif Profil</span>
                   <h2 class="hero-name" id="heroProfileName">Profil seçilmedi</h2>
                   <div class="hero-chips" id="heroProfileChips"></div>
                   <p class="hero-sub" id="heroProfileSub">Başlamak için yeni bir profil oluşturun.</p>
@@ -122,52 +141,90 @@
 
               <div class="hero-actions">
                 <button type="button" class="btn btn-secondary" id="heroDetailsBtn" disabled>Detaylar</button>
-                <button type="button" class="btn btn-ghost" id="heroManageBtn">Profilleri Yönet</button>
+                <button type="button" class="btn btn-ghost" id="heroManageBtn">Profilleri yönet</button>
               </div>
 
               <div class="hero-switch">
-                <label for="activeInstanceSelect">Profil Değiştir</label>
+                <label for="activeInstanceSelect">Profil değiştir</label>
                 <div class="input-with-icon">
-                  <span class="input-icon">🗂️</span>
+                  <span class="input-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  </span>
                   <select id="activeInstanceSelect" class="styled-select styled-select-lg"></select>
                 </div>
               </div>
             </div>
 
-            <!-- DEV OYUNU BAŞLAT BUTONU (durumlar: idle / busy / running) -->
             <button class="btn-mega-launch" id="btnLaunchGame" data-mode="idle">
               <span class="btn-glow-pulse"></span>
-              <span class="btn-icon">▶</span>
+              <span class="btn-icon" aria-hidden="true">▶</span>
               <span class="btn-text" id="btnLaunchText">OYUNU BAŞLAT</span>
+              <span class="btn-key">ENTER</span>
             </button>
+
+            <section class="panel recent-panel">
+              <div class="panel-head recent-head">
+                <div>
+                  <h3 class="panel-title">Son dünyalar</h3>
+                  <span class="panel-sub" id="recentWorldsSub">Aktif profilden</span>
+                </div>
+                <button class="btn-quiet" id="btnRefreshWorlds" type="button">Yenile</button>
+              </div>
+              <div class="recent-list" id="recentWorldsList">
+                <div class="skeleton skeleton-row"></div>
+                <div class="skeleton skeleton-row"></div>
+              </div>
+            </section>
+
+            <div class="quick-actions">
+              <button class="quick-action" id="btnOpenModsFolder" type="button">
+                <span class="quick-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+                </span>
+                <span class="quick-text"><strong>Mod klasörü</strong><small>Profilin mods dizini</small></span>
+              </button>
+              <button class="quick-action" id="btnOpenInstanceFolder" type="button">
+                <span class="quick-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+                </span>
+                <span class="quick-text"><strong>Profil klasörü</strong><small>instance dizinini aç</small></span>
+              </button>
+              <button class="quick-action" id="btnOpenInstanceScreenshots" type="button">
+                <span class="quick-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="m21 15-4.5-4.5L9 18"/></svg>
+                </span>
+                <span class="quick-text"><strong>Ekran görüntüleri</strong><small>Profilin görüntüleri</small></span>
+              </button>
+            </div>
           </div>
 
-          <!-- SAĞ: KOMPAKT AYARLAR PANELİ -->
           <aside class="panel play-settings">
             <div class="panel-head">
-              <h3 class="panel-title">Oyun Ayarları</h3>
-              <span class="panel-sub">Bu ayarlar tüm profillerde geçerlidir</span>
+              <h3 class="panel-title">Oyun ayarları</h3>
+              <span class="panel-sub">Tüm profillerde geçerli</span>
             </div>
 
-            <!-- Oyuncu Adı -->
             <div class="form-group">
               <div class="label-row">
-                <label for="usernameInput">Oyuncu Adı (Nickname)</label>
-                <span class="label-badge">Çevrimdışı Hesap</span>
+                <label for="usernameInput">Oyuncu adı</label>
+                <span class="label-badge">Çevrimdışı</span>
               </div>
               <div class="input-with-icon">
-                <span class="input-icon">👤</span>
+                <span class="input-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+                </span>
                 <input type="text" id="usernameInput" class="styled-input" placeholder="Oyuncu adınızı yazın..." value="Steve" autocomplete="off" spellcheck="false">
               </div>
             </div>
 
-            <!-- Optimize Motoru -->
             <div class="optimize-banner-row">
               <div class="opt-banner-left">
-                <span class="opt-lightning">⚡</span>
+                <span class="opt-lightning" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12z"/></svg>
+                </span>
                 <div class="opt-banner-text">
-                  <span class="opt-banner-title">ÖZEL OPTİMİZE MOTORU</span>
-                  <span class="opt-banner-desc">Sodium + Lithium + FerriteCore + Indium otomatik kurulur; RAM ve GC parametreleri ayarlanır.</span>
+                  <span class="opt-banner-title">Optimize motoru</span>
+                  <span class="opt-banner-desc">Sodium, Lithium, FerriteCore ve Indium otomatik kurulur; RAM ve GC ayarlanır.</span>
                 </div>
               </div>
               <label class="toggle-switch">
@@ -176,10 +233,9 @@
               </label>
             </div>
 
-            <!-- RAM Ayarı + Görsel Bellek Çubuğu -->
             <div class="form-group ram-group">
               <div class="label-row">
-                <label for="ramSlider">Ayrılan Bellek (RAM)</label>
+                <label for="ramSlider">Ayrılan bellek</label>
                 <span class="ram-display-badge" id="ramValueText">4 GB</span>
               </div>
               <input type="range" id="ramSlider" class="styled-range" min="2" max="16" step="1" value="4">
@@ -192,21 +248,43 @@
               </div>
               <p class="ram-summary" id="ramSummary">Oyun için ayrılan bellek miktarı.</p>
             </div>
-          </aside>
 
+            <div class="settings-block">
+              <span class="settings-label">Sistem</span>
+              <div class="stat-row"><span>Core</span><strong id="settingsCoreText">Hazır</strong></div>
+              <div class="stat-row"><span>API</span><strong id="settingsApiText">127.0.0.1:18420</strong></div>
+              <div class="stat-row"><span>Sürüm</span><strong>3.1.0</strong></div>
+            </div>
+
+            <div class="settings-hint">
+              <span class="settings-label">İpucu</span>
+              <p>Bir profili açtıktan sonra <kbd>Enter</kbd> ile doğrudan başlatabilirsiniz.</p>
+            </div>
+          </aside>
         </div>
       </section>
 
-      <!-- =================== SEKME 2: PROFİLLER (INSTANCES) =================== -->
+      <!-- =================== SEKME 2: PROFİLLER =================== -->
       <section class="tab-pane" id="tab-instances">
         <div class="section-titlebar">
           <div>
-            <h2 class="title-text">Oyun Profilleri (Instances)</h2>
-            <p class="subtitle-text">Her profil kendi sürümüne, yükleyicisine ve izole mod klasörüne sahiptir. Modrinth'ten kurduğunuz modlar aktif profilin içine gider.</p>
+            <span class="eyebrow">Kütüphane</span>
+            <h2 class="title-text">Oyun profilleri</h2>
+            <p class="subtitle-text">Her profil kendi sürümüne, yükleyicisine ve izole mod klasörüne sahiptir.</p>
           </div>
-          <button class="btn-primary-action" id="btnCreateInstance">➕ Yeni Profil Oluştur</button>
+          <div class="section-actions">
+            <div class="search-box search-box-compact">
+              <input type="text" id="instanceSearchInput" class="styled-input search-input" placeholder="Profil ara..." autocomplete="off" spellcheck="false">
+            </div>
+            <select id="instanceSortSelect" class="styled-select" aria-label="Profil sıralaması">
+              <option value="created">Oluşturulma</option>
+              <option value="name">İsim</option>
+              <option value="mods">Mod sayısı</option>
+              <option value="played">Son oynanan</option>
+            </select>
+            <button class="btn-primary-action" id="btnCreateInstance">Yeni profil oluştur</button>
+          </div>
         </div>
-        <!-- İskelet (skeleton) yükleme: veri gelince JS doldurur -->
         <div class="instances-grid" id="instancesGridWrap">
           <div class="skeleton skeleton-card"></div>
           <div class="skeleton skeleton-card"></div>
@@ -216,31 +294,31 @@
 
       <!-- =================== SEKME 3: MODLAR & PAKETLER =================== -->
       <section class="tab-pane" id="tab-modrinth">
-        <!-- ÜST: Keşfet / İndir -->
         <div class="mod-discover-area" id="modrinthDiscoverScroll">
-          <div class="section-titlebar">
+          <div class="section-titlebar modrinth-titlebar">
             <div>
-              <h2 class="title-text">Modrinth İçerik Merkezi</h2>
-              <p class="subtitle-text">Yüzbinlerce mod, modpack, shader ve doku paketini tek tıkla kurun.</p>
+              <span class="eyebrow">Modrinth</span>
+              <h2 class="title-text">İçerik merkezi</h2>
+              <p class="subtitle-text">Yüz binlerce mod, modpack, shader ve doku paketini tek tıkla kurun.</p>
             </div>
             <div class="search-box">
-              <input type="text" id="modrinthSearchInput" class="styled-input search-input" placeholder="Mod veya paket ara...">
-              <button class="btn-search-go" id="btnDoSearch">🔍</button>
+              <input type="text" id="modrinthSearchInput" class="styled-input search-input" placeholder="Mod veya paket ara..." autocomplete="off">
+              <button class="btn-search-go" id="btnDoSearch" aria-label="Ara">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+              </button>
             </div>
           </div>
 
-          <!-- Kategori Butonları -->
           <div class="cat-pill-row">
-            <button class="cat-pill active" data-type="mod">🧩 Modlar</button>
-            <button class="cat-pill" data-type="modpack">📦 Mod Paketleri</button>
-            <button class="cat-pill" data-type="shader">✨ Shaderlar</button>
-            <button class="cat-pill" data-type="resourcepack">🎨 Doku Paketleri</button>
+            <button class="cat-pill active" data-type="mod">Modlar</button>
+            <button class="cat-pill" data-type="modpack">Mod paketleri</button>
+            <button class="cat-pill" data-type="shader">Shaderlar</button>
+            <button class="cat-pill" data-type="resourcepack">Doku paketleri</button>
           </div>
 
-          <!-- Filtre Seçimleri -->
           <div class="modrinth-filter-bar">
             <div class="m-filter-group">
-              <label>Yükleyici:</label>
+              <label for="modrinthLoaderSelect">Yükleyici</label>
               <select id="modrinthLoaderSelect" class="styled-select">
                 <option value="fabric">Fabric</option>
                 <option value="forge">Forge</option>
@@ -248,35 +326,33 @@
               </select>
             </div>
             <div class="m-filter-group">
-              <label>Sıralama:</label>
+              <label for="modrinthSortSelect">Sıralama</label>
               <select id="modrinthSortSelect" class="styled-select">
-                <option value="downloads">En Çok İndirilen</option>
-                <option value="relevance">Alaka Düzeyi</option>
-                <option value="newest">En Yeni</option>
+                <option value="downloads">En çok indirilen</option>
+                <option value="relevance">Alaka düzeyi</option>
+                <option value="newest">En yeni</option>
               </select>
             </div>
             <div class="m-filter-group">
               <label class="mod-hide-toggle" title="Profilde zaten yüklü olan içerikleri listeden gizler">
                 <input type="checkbox" id="hideInstalledToggle">
-                <span>🚫 İndirilenleri gizle</span>
+                <span>İndirilenleri gizle</span>
               </label>
             </div>
             <div class="m-filter-group">
               <label class="mod-hide-toggle" title="Seçili modun Modrinth'teki zorunlu bağımlılıklarını da otomatik kurar">
                 <input type="checkbox" id="installDepsToggle" class="install-deps-cb">
-                <span>🧷 Gerekli bağımlılıkları da kur</span>
+                <span>Bağımlılıkları da kur</span>
               </label>
             </div>
           </div>
 
-          <!-- Kurulum Hedefi (Profil) Çubuğu -->
           <div class="modrinth-target-bar">
-            <span class="target-label">📥 Kurulum Hedefi:</span>
+            <span class="target-label">Kurulum hedefi</span>
             <select id="modrinthInstanceSelect" class="styled-select"></select>
             <span class="target-hint" id="modrinthTargetHint">İçerikler seçilen profilin klasörüne kurulur.</span>
           </div>
 
-          <!-- Kart Grid Listesi (iskelet yükleme) -->
           <div class="modrinth-cards-grid" id="modrinthResultsWrap">
             <div class="skeleton skeleton-card"></div>
             <div class="skeleton skeleton-card"></div>
@@ -287,14 +363,13 @@
           </div>
         </div>
 
-        <!-- ALT: Yönet / Sil -->
         <div class="installed-panel" id="installedPanel">
           <div class="installed-panel-header">
-            <span class="installed-panel-title">📦 Yüklü İçerikler <span class="installed-profile-name" id="installedPanelProfile">— profil seçilmedi</span></span>
+            <span class="installed-panel-title">Yüklü içerikler <span class="installed-profile-name" id="installedPanelProfile">— profil seçilmedi</span></span>
             <div class="installed-cat-tabs">
               <button class="installed-cat-tab active" data-cat="mod">Modlar <span id="installedCountMod">0</span></button>
               <button class="installed-cat-tab" data-cat="shader">Shaderlar <span id="installedCountShader">0</span></button>
-              <button class="installed-cat-tab" data-cat="resourcepack">Doku Paketleri <span id="installedCountResourcepack">0</span></button>
+              <button class="installed-cat-tab" data-cat="resourcepack">Doku paketleri <span id="installedCountResourcepack">0</span></button>
             </div>
             <button class="btn-installed-collapse" id="btnToggleInstalledPanel" title="Paneli daralt / genişlet" aria-label="Paneli daralt veya genişlet" aria-expanded="true">▾</button>
           </div>
@@ -306,74 +381,90 @@
         </div>
       </section>
 
-      <!-- =================== SEKME 3: EKRAN GÖRÜNTÜLERİ =================== -->
+      <!-- =================== SEKME 4: GALERİ =================== -->
       <section class="tab-pane" id="tab-gallery">
         <div class="section-titlebar">
           <div>
-            <h2 class="title-text">Ekran Görüntüleri Galerisi</h2>
-            <p class="subtitle-text">Oyunda F2 tuşuyla çektiğiniz tüm anlar burada saklanır.</p>
+            <span class="eyebrow">Arşiv</span>
+            <h2 class="title-text">Ekran görüntüleri</h2>
+            <p class="subtitle-text">Oyunda F2 ile çektiğiniz anlar burada saklanır.</p>
           </div>
-          <button class="btn-secondary" id="btnOpenScreenshotsFolder">📂 Klasörü Aç</button>
+          <button class="btn-secondary" id="btnOpenScreenshotsFolder">Klasörü aç</button>
         </div>
         <div class="gallery-grid" id="screenshotsGridWrap">
-          <!-- JS dolduracak (iskelet yükleme) -->
           <div class="skeleton skeleton-card"></div>
           <div class="skeleton skeleton-card"></div>
           <div class="skeleton skeleton-card"></div>
+        </div>
+        <div class="app-lightbox" id="galleryLightbox" aria-hidden="true">
+          <button class="app-lightbox-close" id="galleryLightboxClose" aria-label="Kapat">✕</button>
+          <img class="app-lightbox-img" id="galleryLightboxImg" alt="">
         </div>
       </section>
 
-      <!-- =================== SEKME 4: KONSOL =================== -->
+      <!-- =================== SEKME 5: KONSOL =================== -->
       <section class="tab-pane" id="tab-console">
-        <div class="section-titlebar">
+        <div class="section-titlebar console-titlebar">
           <div>
-            <h2 class="title-text">Canlı Oyun Konsolu</h2>
+            <span class="eyebrow">Günlük</span>
+            <h2 class="title-text">Canlı konsol</h2>
             <p class="subtitle-text">Oyunun ve başlatıcının arka plan günlüklerini anlık takip edin.</p>
           </div>
-          <button class="btn-secondary" id="btnClearConsole">Temizle</button>
+          <div class="console-actions">
+            <label class="console-scroll"><input type="checkbox" id="consoleAutoscroll" checked> Otomatik kaydır</label>
+            <button class="btn-secondary" id="btnCopyConsole">Kopyala</button>
+            <button class="btn-secondary" id="btnExportConsole">Dışa aktar</button>
+            <button class="btn-secondary" id="btnClearConsole">Temizle</button>
+          </div>
         </div>
         <pre class="console-output" id="consoleOutput">CookieLauncher Core Konsolu Hazır...\n</pre>
       </section>
-
     </main>
   </div>
 
-  <!-- =================== TAM EKRAN: PROFİL DETAY (FAZ 1) =================== -->
+  <footer class="statusbar" id="statusBar" data-state="ready">
+    <div class="status-left">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span id="statusCoreText">Core hazır</span>
+      <span class="status-sep">/</span>
+      <span class="mono" id="statusApiText">127.0.0.1:18420</span>
+    </div>
+    <div class="status-center mono">Ctrl+1–5 sekmeler · Ctrl+K ara · ? kısayollar</div>
+    <div class="status-right mono">v3.1.0 · Java Edition</div>
+  </footer>
+
+  <!-- =================== TAM EKRAN: PROFİL DETAY =================== -->
   <div class="pds-screen" id="profileDetailScreen" style="display: none;" aria-hidden="true"
        role="dialog" aria-modal="true" aria-label="Profil Detayı">
-    <!-- ÜST BAŞLIK -->
     <header class="pds-header">
       <button class="pds-back" id="pdsBackBtn" title="Geri (ESC)" aria-label="Geri">←</button>
-      <div class="pds-head-icon" id="pdsHeadIcon">🗂️</div>
+      <div class="pds-head-icon" id="pdsHeadIcon">?</div>
       <div class="pds-head-info">
         <h2 class="pds-head-name" id="pdsHeadName">Profil</h2>
         <p class="pds-head-meta" id="pdsHeadMeta">MC ? • ? • 0 mod</p>
       </div>
-      <button class="btn-secondary pds-close" id="pdsCloseBtn">✕ Kapat</button>
+      <button class="btn-secondary pds-close" id="pdsCloseBtn">Kapat</button>
     </header>
 
     <div class="pds-body">
-      <!-- SOL DİKEY MENÜ: 12 sekme -->
       <aside class="pds-sidebar" role="tablist" aria-label="Profil detay sekmeleri">
-        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="logs"><span class="pds-side-icon">📜</span><span>Minecraft Günlüğü</span></button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="version"><span class="pds-side-icon">🧱</span><span>Sürüm</span></button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="modrinth"><span class="pds-side-icon">🔎</span><span>Modrinth</span></button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="mods"><span class="pds-side-icon">🧩</span><span>Modlar</span></button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="resourcepack"><span class="pds-side-icon">🎨</span><span>Kaynak Paketleri</span></button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="shader"><span class="pds-side-icon">✨</span><span>Shader Paketleri</span></button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="notes"><span class="pds-side-icon">📝</span><span>Notlar</span></button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="worlds"><span class="pds-side-icon">🌍</span><span>Dünyalar</span></button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="servers"><span class="pds-side-icon">🌐</span><span>Sunucular</span></button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="screenshots"><span class="pds-side-icon">📸</span><span>Ekran Görüntüleri</span></button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="settings"><span class="pds-side-icon">⚙️</span><span>Ayarlar</span></button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="others"><span class="pds-side-icon">🗄️</span><span>Diğer Kayıtlar</span></button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="logs"><span class="pds-side-icon">01</span><span>Minecraft günlüğü</span></button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="version"><span class="pds-side-icon">02</span><span>Sürüm</span></button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="modrinth"><span class="pds-side-icon">03</span><span>Modrinth</span></button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="mods"><span class="pds-side-icon">04</span><span>Modlar</span></button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="resourcepack"><span class="pds-side-icon">05</span><span>Kaynak paketleri</span></button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="shader"><span class="pds-side-icon">06</span><span>Shader paketleri</span></button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="notes"><span class="pds-side-icon">07</span><span>Notlar</span></button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="worlds"><span class="pds-side-icon">08</span><span>Dünyalar</span></button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="servers"><span class="pds-side-icon">09</span><span>Sunucular</span></button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="screenshots"><span class="pds-side-icon">10</span><span>Ekran görüntüleri</span></button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="settings"><span class="pds-side-icon">11</span><span>Ayarlar</span></button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pdsContent" class="pds-side-tab" data-pds-tab="others"><span class="pds-side-icon">12</span><span>Diğer kayıtlar</span></button>
       </aside>
 
-      <!-- SAĞ İÇERİK ALANI -->
       <section class="pds-content" id="pdsContent" role="tabpanel" tabindex="0"></section>
     </div>
 
-    <!-- MOD DETAY ÇEKMECESİ -->
     <div class="pds-drawer-backdrop" id="pdsDrawerBackdrop"></div>
     <aside class="pds-drawer" id="pdsDrawer" aria-hidden="true">
       <div class="pds-drawer-head">
@@ -383,14 +474,13 @@
       <div class="pds-drawer-body" id="pdsDrawerBody"></div>
     </aside>
 
-    <!-- SHADER MAĞAZASI (FAZ 3): aynı ekran içinde overlay panel -->
     <div class="pds-store-backdrop" id="pdsStoreBackdrop"></div>
     <section class="pds-store" id="pdsStore" aria-hidden="true">
       <div class="pds-store-head">
         <div class="pds-store-titleline">
-          <span class="pds-store-emoji">🛍️</span>
+          <div class="pds-store-emoji" aria-hidden="true">S</div>
           <div>
-            <h3 class="pds-store-title">Shader Mağazası</h3>
+            <h3 class="pds-store-title">Shader mağazası</h3>
             <p class="pds-store-sub" id="pdsStoreSub">Modrinth'ten shader paketleri indirin.</p>
           </div>
         </div>
@@ -403,68 +493,65 @@
           <option value="downloads" selected>En çok indirilen</option>
           <option value="newest">En yeni</option>
         </select>
-        <button type="button" class="btn-primary-action" id="pdsStoreSearchBtn">🔍 Ara</button>
+        <button type="button" class="btn-primary-action" id="pdsStoreSearchBtn">Ara</button>
       </div>
-      <div class="pds-store-note">ℹ️ Shader'lar <code>shaderpacks/</code> klasörüne kurulur; oyun içinde Iris/OptiFine menüsünden seçilir.</div>
+      <div class="pds-store-note">Shader'lar <code>shaderpacks/</code> klasörüne kurulur; oyun içinde Iris/OptiFine menüsünden seçilir.</div>
       <div class="pds-store-grid" id="pdsStoreResults"></div>
     </section>
 
-    <!-- EKRAN GÖRÜNTÜSÜ BÜYÜK GÖRÜNÜM (FAZ 4) -->
     <div class="pds-lightbox" id="pdsLightbox" aria-hidden="true">
       <button class="pds-lightbox-close" id="pdsLightboxClose" title="Kapat (ESC)" aria-label="Kapat">✕</button>
       <img class="pds-lightbox-img" id="pdsLightboxImg" alt="">
     </div>
   </div>
 
-  <!-- =================== MODAL: YENİ PROFİL (SEKMELİ YENİ ARAYÜZ) =================== -->
+  <!-- =================== MODAL: YENİ PROFİL =================== -->
   <div class="modal-backdrop" id="createInstanceModal" style="display: none;">
     <div class="modal-window create-instance-modal np-modal" role="dialog" aria-modal="true" aria-labelledby="npModalTitle">
       <div class="modal-top">
         <div class="modal-top-title">
-          <span class="m-icon">🗂️</span>
-          <h3 id="npModalTitle">Yeni Profil Oluştur</h3>
+          <span class="m-icon">+</span>
+          <h3 id="npModalTitle">Yeni profil oluştur</h3>
         </div>
         <button class="btn-close-modal" id="btnCloseCreateInstanceModal" aria-label="Kapat">✕</button>
       </div>
 
       <div class="np-layout">
-        <!-- SOL MENÜ: yalnızca 2 sekme -->
         <aside class="np-sidebar" role="tablist" aria-label="Profil oluşturma yöntemi">
           <button type="button" class="np-side-tab active" id="npTabCustom" data-np-tab="custom"
                   role="tab" aria-selected="true" aria-controls="npPaneCustom">
-            <span class="np-side-icon">🛠️</span>
+            <span class="np-side-icon">01</span>
             <span class="np-side-text">
-              <strong>Özel Profil</strong>
+              <strong>Özel profil</strong>
               <small>Sürüm ve yükleyici seç</small>
             </span>
           </button>
           <button type="button" class="np-side-tab" id="npTabPacks" data-np-tab="packs"
                   role="tab" aria-selected="false" aria-controls="npPanePacks">
-            <span class="np-side-icon">📦</span>
+            <span class="np-side-icon">02</span>
             <span class="np-side-text">
-              <strong>Mod Paketleri</strong>
+              <strong>Mod paketleri</strong>
               <small>Modrinth'ten kur</small>
             </span>
           </button>
         </aside>
 
         <section class="np-content">
-          <!-- ==== SEKME 1: ÖZEL PROFİL ==== -->
           <div class="np-pane active" id="npPaneCustom" role="tabpanel" aria-labelledby="npTabCustom">
             <div class="np-grid-2">
               <div class="form-group">
-                <label for="instanceNameInput">Profil Adı</label>
+                <label for="instanceNameInput">Profil adı</label>
                 <input type="text" id="instanceNameInput" class="styled-input" placeholder="örn: Optimize Survival" autocomplete="off" spellcheck="false">
               </div>
               <div class="form-group">
-                <label for="instanceIconInput">Profil Resmi <span class="np-opt">(opsiyonel)</span></label>
+                <label for="instanceIconInput">Profil resmi <span class="np-opt">(opsiyonel)</span></label>
                 <input type="text" id="instanceIconInput" class="styled-input" placeholder="https://.../ikon.png" autocomplete="off" spellcheck="false">
               </div>
             </div>
 
             <div class="form-group">
               <div class="label-row">
-                <label for="npVersionPicker">Minecraft Sürümü</label>
+                <label for="npVersionPicker">Minecraft sürümü</label>
                 <span class="label-hint" id="npVersionHint">Yazıp arayın, listeden seçin</span>
               </div>
               <button type="button" class="np-version-picker" id="npVersionPicker" aria-haspopup="dialog">
@@ -478,7 +565,7 @@
                   <span class="nvp-version" id="npVersionPickerValue">1.20.4</span>
                 </span>
                 <span class="nvp-badge" id="npVersionPickerBadge" data-type="release">Release</span>
-                <span class="nvp-opt" id="npVersionPickerOpt" style="display:none;">⚡</span>
+                <span class="nvp-opt" id="npVersionPickerOpt" style="display:none;">OPT</span>
                 <span class="nvp-open-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M14 3h7v7"/><path d="M21 3l-9 9"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>
@@ -488,30 +575,30 @@
             </div>
 
             <div class="form-group">
-              <label>Mod Yükleyici</label>
+              <label>Mod yükleyici</label>
               <div class="np-loader-grid" id="npLoaderGrid">
                 <button type="button" class="np-loader-card" data-loader="vanilla">
-                  <span class="np-lc-icon" aria-hidden="true">🧱</span>
+                  <span class="np-lc-icon" aria-hidden="true">V</span>
                   <span class="np-lc-name">Vanilla</span>
                   <small>Yükleyici yok</small>
                 </button>
                 <button type="button" class="np-loader-card" data-loader="neoforge">
-                  <span class="np-lc-icon" aria-hidden="true">🦊</span>
+                  <span class="np-lc-icon" aria-hidden="true">N</span>
                   <span class="np-lc-name">NeoForge</span>
                   <small>Modern Forge</small>
                 </button>
                 <button type="button" class="np-loader-card" data-loader="forge">
-                  <span class="np-lc-icon" aria-hidden="true">🔨</span>
+                  <span class="np-lc-icon" aria-hidden="true">F</span>
                   <span class="np-lc-name">Forge</span>
                   <small>Klasik modlar</small>
                 </button>
                 <button type="button" class="np-loader-card active" data-loader="fabric">
-                  <span class="np-lc-icon" aria-hidden="true">⚡</span>
+                  <span class="np-lc-icon" aria-hidden="true">Fb</span>
                   <span class="np-lc-name">Fabric</span>
                   <small>Yüksek performans</small>
                 </button>
                 <button type="button" class="np-loader-card" data-loader="quilt">
-                  <span class="np-lc-icon" aria-hidden="true">🧵</span>
+                  <span class="np-lc-icon" aria-hidden="true">Q</span>
                   <span class="np-lc-name">Quilt</span>
                   <small>Fabric uyumlu</small>
                 </button>
@@ -525,12 +612,12 @@
                 <span class="np-lv-value" id="npLoaderRecommended"><span class="np-lv-spinner" aria-hidden="true"></span> hesaplanıyor...</span>
                 <span class="np-lv-sub" id="npLoaderReason">Sürüm + yükleyici seçildiğinde otomatik atanır</span>
               </div>
-              <button type="button" class="np-adv-toggle" id="npAdvToggle" aria-expanded="false" aria-controls="npAdvPanel">⚙️ Gelişmiş</button>
+              <button type="button" class="np-adv-toggle" id="npAdvToggle" aria-expanded="false" aria-controls="npAdvPanel">Gelişmiş</button>
             </div>
 
             <div class="np-adv" id="npAdvPanel" hidden>
               <div class="form-group">
-                <label for="npLoaderVersionSelect">Loader Sürümü Değiştir</label>
+                <label for="npLoaderVersionSelect">Loader sürümü değiştir</label>
                 <select id="npLoaderVersionSelect" class="styled-select">
                   <option value="">Otomatik (önerilen)</option>
                 </select>
@@ -539,11 +626,10 @@
             </div>
           </div>
 
-          <!-- ==== SEKME 2: MOD PAKETLERİ (yalnızca Modrinth) ==== -->
           <div class="np-pane" id="npPanePacks" role="tabpanel" aria-labelledby="npTabPacks">
             <div class="np-pack-top">
               <div class="np-pack-search">
-                <span class="np-combo-icon" aria-hidden="true">🔍</span>
+                <span class="np-combo-icon" aria-hidden="true">A</span>
                 <input type="text" id="npPackSearchInput" class="styled-input" placeholder="Ara ve filtrele..." autocomplete="off">
               </div>
               <select id="npPackLoaderFilter" class="styled-select" aria-label="Yükleyici filtresi">
@@ -561,7 +647,7 @@
               <div class="np-pack-list" id="npPackList" role="listbox" aria-label="Mod paketleri"></div>
               <div class="np-pack-detail" id="npPackDetail">
                 <div class="np-pack-empty">
-                  <span class="np-pack-empty-icon" aria-hidden="true">📦</span>
+                  <span class="np-pack-empty-icon" aria-hidden="true">—</span>
                   <span>Detayları görmek için soldan bir mod paketi seçin.</span>
                 </div>
               </div>
@@ -578,21 +664,21 @@
                 </select>
               </label>
               <label class="np-pack-bottom-item">
-                <span>Seçilen Sürüm</span>
+                <span>Seçilen sürüm</span>
                 <select id="npPackGameVersionSelect" class="styled-select"></select>
               </label>
               </div>
-              <button type="button" class="btn-primary-action np-pack-install" id="npPackInstallBtn" disabled>📦 Profil Olarak Kur</button>
+              <button type="button" class="btn-primary-action np-pack-install" id="npPackInstallBtn" disabled>Profil olarak kur</button>
             </div>
           </div>
         </section>
       </div>
 
       <div class="modal-bottom">
-        <span class="modal-tip-text" id="npModalTip">💡 Profil oluşturulunca otomatik olarak aktif edilir.</span>
+        <span class="modal-tip-text" id="npModalTip">Profil oluşturulunca otomatik olarak aktif edilir.</span>
         <div class="ci-actions">
           <button class="btn-secondary" id="btnCancelCreateInstance">Vazgeç</button>
-          <button class="btn-primary-action" id="btnConfirmCreateInstance">Oluştur ve Aktif Yap</button>
+          <button class="btn-primary-action" id="btnConfirmCreateInstance">Oluştur ve aktif yap</button>
         </div>
       </div>
     </div>
@@ -602,7 +688,7 @@
   <div class="modal-backdrop" id="confirmModal" style="display: none;">
     <div class="modal-window confirm-modal-window" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
       <div class="confirm-modal-inner">
-        <div class="confirm-icon" id="confirmModalIcon">⚠️</div>
+        <div class="confirm-icon" id="confirmModalIcon">!</div>
         <h3 class="confirm-title" id="confirmModalTitle">Emin misiniz?</h3>
         <p class="confirm-message" id="confirmModalMessage"></p>
         <div class="confirm-actions">
@@ -618,9 +704,9 @@
     <div class="modal-window version-switch-window" role="dialog" aria-modal="true" aria-labelledby="vswTitle">
       <div class="modal-top">
         <div class="modal-top-title vsw-head">
-          <span class="vsw-icon" id="vswIcon">🧩</span>
+          <span class="vsw-icon" id="vswIcon">V</span>
           <div class="vsw-head-text">
-            <h3 id="vswTitle">Sürüm Değiştir</h3>
+            <h3 id="vswTitle">Sürüm değiştir</h3>
             <p class="vsw-sub" id="vswSub">Tüm sürümler yükleniyor...</p>
           </div>
         </div>
@@ -643,19 +729,19 @@
       </div>
 
       <div class="modal-bottom">
-        <span class="modal-tip-text">💡 Yalnızca profilinizle uyumlu sürümler listelenir; uyumsuzları üstteki anahtardan gösterin.</span>
+        <span class="modal-tip-text">Yalnızca profilinizle uyumlu sürümler listelenir; uyumsuzları üstteki anahtardan gösterin.</span>
         <button class="btn-secondary" id="btnCancelVersionSwitch">Kapat</button>
       </div>
     </div>
   </div>
 
-  <!-- =================== MODAL: SÜRÜM SEÇİCİ VE SAĞ FİLTRELEME PANELİ =================== -->
+  <!-- =================== MODAL: SÜRÜM SEÇİCİ =================== -->
   <div class="modal-backdrop" id="versionSelectorModal" style="display: none;">
     <div class="modal-window version-modal-window" role="dialog" aria-modal="true" aria-label="Minecraft Sürümü Seç">
       <div class="modal-top">
         <div class="modal-top-title">
-          <span class="m-icon">📦</span>
-          <h3>Minecraft Sürümü Seç</h3>
+          <span class="m-icon">V</span>
+          <h3>Minecraft sürümü seç</h3>
         </div>
         <button class="btn-close-modal" id="btnCloseVersionSelectorModal" aria-label="Kapat">✕</button>
       </div>
@@ -663,14 +749,16 @@
       <div class="version-selector-body">
         <div class="vmodal-topbar">
           <div class="version-search-input-box">
-            <span class="v-search-icon" aria-hidden="true">🔍</span>
+            <span class="v-search-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+            </span>
             <input type="text" id="versionTableSearchInput" class="styled-input" placeholder="Ara: 1.20.1, snapshot..." autocomplete="off">
             <button class="btn-clear-search" id="btnClearVersionSearch" style="display: none;">✕</button>
           </div>
           <div class="vfilter-pills" role="group" aria-label="Sürüm tipi filtreleri">
             <label class="vpill vpill-opt" title="Yalnızca Cookie Launcher optimize profil hazır olan sürümler">
               <input type="checkbox" id="cbFilterOptimized" class="version-filter-cb" data-category="optimized">
-              <span>⚡ Optimize</span>
+              <span>Optimize</span>
             </label>
             <label class="vpill">
               <input type="checkbox" id="cbFilterReleases" class="version-filter-cb" data-category="release" checked>
@@ -678,7 +766,7 @@
             </label>
             <label class="vpill">
               <input type="checkbox" id="cbFilterSnapshots" class="version-filter-cb" data-category="snapshot">
-              <span>Snapshots</span>
+              <span>Snapshot</span>
             </label>
             <label class="vpill">
               <input type="checkbox" id="cbFilterBetas" class="version-filter-cb" data-category="beta">
@@ -695,9 +783,7 @@
           </div>
         </div>
 
-        <div class="vmodal-list" id="versionCardList" role="listbox" aria-label="Minecraft sürümleri">
-          <!-- JS doldurur -->
-        </div>
+        <div class="vmodal-list" id="versionCardList" role="listbox" aria-label="Minecraft sürümleri"></div>
 
         <div class="no-results-msg" id="versionNoResults" style="display: none;">
           <span>Filtrelere ve arama kriterinize uygun sürüm bulunamadı.</span>
@@ -707,45 +793,70 @@
       </div>
 
       <div class="modal-bottom">
-        <span class="modal-tip-text">💡 Seçmek istediğiniz sürümün kartına tıklamanız yeterlidir.</span>
+        <span class="modal-tip-text">Seçmek istediğiniz sürümün kartına tıklamanız yeterlidir.</span>
         <button class="btn-secondary" id="btnCancelVersionSelectorModal">Kapat</button>
       </div>
     </div>
   </div>
 
-    <!-- =================== MODAL: CANLI İLERLEME ÇUBUĞU (NON-BLOCKING LAUNCH) =================== -->
+  <!-- =================== MODAL: CANLI İLERLEME =================== -->
   <div class="modal-backdrop" id="launchProgressModal" style="display: none;">
     <div class="modal-window progress-modal-window" role="dialog" aria-modal="true" aria-labelledby="launchProgressTitle">
       <div class="progress-modal-inner">
         <div class="progress-spinner-glow">
           <div class="pulse-ring"></div>
-          <span class="progress-cube-icon">⛏️</span>
+          <span class="progress-cube-icon" aria-hidden="true">C</span>
         </div>
 
-        <h3 class="progress-title" id="launchProgressTitle">Minecraft Hazırlanıyor...</h3>
+        <h3 class="progress-title" id="launchProgressTitle">Minecraft hazırlanıyor...</h3>
         <p class="progress-status-msg" id="launchProgressStatusText">Bileşenler kontrol ediliyor...</p>
         <p class="progress-detail-msg" id="launchProgressDetailText">İndirme akışı başlatılıyor...</p>
 
-        <!-- Canlı İlerleme Çubuğu -->
         <div class="progress-bar-container">
           <div class="progress-bar-fill" id="launchProgressBarFill" style="width: 0%;"></div>
         </div>
 
         <div class="progress-meta-row">
           <span class="progress-percent" id="launchProgressPercent">0%</span>
-          <span class="progress-mb-text" id="launchProgressMbText">⬇ 0.0 MB</span>
-          <span class="progress-engine-tag">⚡ Cookie Launcher Engine</span>
+          <span class="progress-mb-text" id="launchProgressMbText">0.0 MB</span>
+          <span class="progress-engine-tag">Cookie Engine</span>
         </div>
 
-        <button class="btn-dismiss-progress" id="btnDismissProgressModal">Arka Planda Devam Et</button>
+        <button class="btn-dismiss-progress" id="btnDismissProgressModal">Arka planda devam et</button>
       </div>
     </div>
   </div>
 
-  <!-- Toast Bildirimleri -->
+  <!-- =================== MODAL: KISAYOLLAR =================== -->
+  <div class="modal-backdrop" id="shortcutsModal" style="display: none;">
+    <div class="modal-window shortcuts-window" role="dialog" aria-modal="true" aria-labelledby="shortcutsTitle">
+      <div class="modal-top">
+        <div class="modal-top-title">
+          <span class="m-icon">?</span>
+          <h3 id="shortcutsTitle">Klavye kısayolları</h3>
+        </div>
+        <button class="btn-close-modal" id="btnCloseShortcuts" aria-label="Kapat">✕</button>
+      </div>
+      <div class="shortcuts-body">
+        <div class="shortcut-row"><span>Oyna sekmesi</span><kbd>Ctrl</kbd><kbd>1</kbd></div>
+        <div class="shortcut-row"><span>Profiller</span><kbd>Ctrl</kbd><kbd>2</kbd></div>
+        <div class="shortcut-row"><span>Modlar</span><kbd>Ctrl</kbd><kbd>3</kbd></div>
+        <div class="shortcut-row"><span>Galeri</span><kbd>Ctrl</kbd><kbd>4</kbd></div>
+        <div class="shortcut-row"><span>Konsol</span><kbd>Ctrl</kbd><kbd>5</kbd></div>
+        <div class="shortcut-row"><span>İçerik araması</span><kbd>Ctrl</kbd><kbd>K</kbd></div>
+        <div class="shortcut-row"><span>Oyunu başlat</span><kbd>Enter</kbd></div>
+        <div class="shortcut-row"><span>Kısayollar</span><kbd>?</kbd></div>
+        <div class="shortcut-row"><span>Kapat / geri</span><kbd>Esc</kbd></div>
+      </div>
+      <div class="modal-bottom">
+        <span class="modal-tip-text">Kısayollar yalnızca bir metin alanında yazmıyorken çalışır.</span>
+        <button class="btn-secondary" id="btnCloseShortcutsFooter">Kapat</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast-container" id="toastContainer"></div>
 
-  <!-- Bağımlılıklar & JS -->
   <script src="app.js"></script>
 </body>
 </html>
