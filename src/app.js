@@ -88,7 +88,9 @@ const socialUI = {
   shareBusy: false,
   dismissedInvites: new Set(),
   pendingClipboardInvite: "",
-  lastClipboardInvite: ""
+  lastClipboardInvite: "",
+  relayStartAttempted: false,
+  relayStarting: false
 };
 
 // Backend'e erişilemezse gösterilecek yerel sürüm listesi (uygulama asla boş kalmasın)
@@ -988,6 +990,7 @@ function switchTab(tabId) {
     loadInstances();
   } else if (tabId === "tab-friends") {
     loadSocialState(false);
+    ensureSocialRelay();
   }
 }
 
@@ -6132,10 +6135,39 @@ function socialEmptyMarkup(title, desc, icon = "·") {
 
 function startSocialPolling() {
   if (socialUI.timer) return;
-  loadSocialState(true);
   socialUI.timer = setInterval(() => {
-    if (!document.hidden) loadSocialState(false);
+    if (document.hidden) return;
+    const pane = document.getElementById("tab-friends");
+    if (pane && pane.classList.contains("active")) loadSocialState(false);
   }, 4000);
+}
+
+async function ensureSocialRelay(force = false) {
+  if (socialUI.relayStarting) return;
+  if (socialUI.data && socialUI.data.connected) return;
+  if (socialUI.relayStartAttempted && !force) return;
+  socialUI.relayStartAttempted = true;
+  socialUI.relayStarting = true;
+  socialUI.apiError = "";
+  renderSocial();
+  try {
+    const data = await apiPost("/api/social/relay/start", {}, 160000);
+    if (data && data.success !== false) {
+      socialUI.data = data;
+      socialUI.apiError = "";
+      renderSocial();
+      await loadSocialState(true);
+    } else {
+      socialUI.apiError = (data && data.error) || "Sosyal relay başlatılamadı. İnternet bağlantısını kontrol et.";
+      renderSocial();
+    }
+  } catch (_) {
+    socialUI.apiError = "Sosyal relay başlatılamadı. İnternet bağlantısını kontrol et.";
+    renderSocial();
+  } finally {
+    socialUI.relayStarting = false;
+    renderSocial();
+  }
 }
 
 async function loadSocialState(initial = false) {
@@ -6193,10 +6225,15 @@ function renderSocial() {
   const banner = document.getElementById("socialBanner");
   if (banner) {
     const error = socialUI.apiError || (data && data.error) || "";
-    if (!connected && (error || !data)) {
+    if (!connected && socialUI.relayStarting) {
+      banner.hidden = false;
+      banner.dataset.state = "connecting";
+      banner.innerHTML = `<span><strong>Sosyal relay başlatılıyor…</strong> Ücretsiz tünel hazırlanıyor, bu birkaç saniye sürebilir.</span>`;
+    } else if (!connected && (error || !data)) {
       banner.hidden = false;
       banner.dataset.state = "error";
-      banner.innerHTML = `<span><strong>Sosyal bağlantı yok.</strong> ${socialEsc(error || "Relay'e bağlanılamadı. Ayarlardan adresi kontrol et.")}</span>
+      banner.innerHTML = `<span><strong>Sosyal bağlantı yok.</strong> ${socialEsc(error || "Relay'e bağlanılamadı.")}</span>
+        <button type="button" class="btn-secondary" data-social-start-relay>Bağlan</button>
         <button type="button" class="btn-secondary" data-social-settings>Bağlantı ayarları</button>`;
     } else {
       banner.hidden = true;
@@ -6658,7 +6695,8 @@ function initSocialUI() {
   });
   document.getElementById("socialShareBtn")?.addEventListener("click", socialShareWorld);
   document.getElementById("socialBanner")?.addEventListener("click", (e) => {
-    if (e.target.closest("[data-social-settings]")) openSocialSettings();
+    if (e.target.closest("[data-social-start-relay]")) ensureSocialRelay(true);
+    else if (e.target.closest("[data-social-settings]")) openSocialSettings();
   });
   document.getElementById("socialSettingsModal")?.addEventListener("click", (e) => {
     if (e.target.id === "socialSettingsModal") closeSocialSettings();
