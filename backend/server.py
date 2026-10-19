@@ -128,7 +128,11 @@ host_relay = None
 def start_social_client():
     """Sosyal istemciyi (relay baglantisi) baslatir. Kritik degil; hata launcher'i durdurmaz."""
     global social_client
-    if SocialClient is None or social_client is not None:
+    if SocialClient is None:
+        if _SOCIAL_IMPORT_ERROR is not None:
+            add_log(f"Sosyal modül yüklenemedi: {_SOCIAL_IMPORT_ERROR}")
+        return social_client
+    if social_client is not None:
         return social_client
     try:
         social_client = SocialClient(APP_DATA_DIR)

@@ -38,7 +38,7 @@ jobs:
       - name: Build standalone core
         run: |
           pyinstaller --onefile --name cookielauncher-core --collect-data certifi `
-            --hidden-import noise --collect-submodules noise `
+            --hidden-import noise --collect-all noise `
             --distpath backend --workpath build/pyinstaller --specpath build backend/server.py
 
       - name: Install frontend deps
@@ -71,6 +71,9 @@ jobs:
             }
             if (-not $ok) { throw "Core health endpoint did not become ready" }
             Write-Host "Core health OK: API $($health.api_version)"
+            $social = Invoke-RestMethod -Uri "http://127.0.0.1:18420/api/social/state" -TimeoutSec 5
+            if ($social.success -eq $false) { throw "Social module unavailable: $($social.error)" }
+            Write-Host "Social module OK"
           } finally {
             Stop-Process -Id $core.Id -Force -ErrorAction SilentlyContinue
           }

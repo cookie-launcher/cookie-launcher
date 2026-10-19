@@ -61,7 +61,7 @@ jobs:
           # gomer. macOS/Windows'ta paketlenmis Python sistem CA'larini
           # goremedigi icin bu olmadan Modrinth/Mojang istekleri
           # SSLCertVerificationError ile basarisiz olup listeler bos geliyordu.
-          pyinstaller --onefile --name cookielauncher-core --collect-data certifi --hidden-import noise --collect-submodules noise --distpath backend --workpath build/pyinstaller --specpath build backend/server.py
+          pyinstaller --onefile --name cookielauncher-core --collect-data certifi --hidden-import noise --collect-all noise --distpath backend --workpath build/pyinstaller --specpath build backend/server.py
 
       - name: Build Tauri App (Produces Windows Setup.exe on windows-latest)
         uses: tauri-apps/tauri-action@v0
