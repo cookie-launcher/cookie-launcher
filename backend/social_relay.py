@@ -44,8 +44,9 @@ from typing import Any, Dict, Optional
 MAX_LINE = 64 * 1024
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 CODE_LEN = 8
-SESSION_TTL = 6 * 60 * 60
-INVITE_TTL = 30 * 60
+# Dünya oturumu ve davet süresi. Ortam değişkeniyle değiştirilebilir.
+SESSION_TTL = int(os.environ.get("CL_SESSION_TTL", str(24 * 60 * 60)))
+INVITE_TTL = int(os.environ.get("CL_INVITE_TTL", str(24 * 60 * 60)))
 PAIR_TTL = 90
 DEFAULT_DATA = os.path.join(os.path.expanduser("~"), ".cookie_launcher", "social_relay.json")
 

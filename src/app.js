@@ -6568,6 +6568,10 @@ async function socialJoinWorld(sessionId) {
     switchTab("tab-instances");
     return;
   }
+  if (state.engineMode === "running" || state.launchRequested) {
+    showToast("Minecraft açıkken otomatik katılınamıyor. Oyunu kapatıp tekrar dene.", "info");
+    return;
+  }
   socialUI.joinBusy = true;
   renderSocial();
   const data = await apiPost("/api/social/world/join", { session_id: sessionId }, 50000);
