@@ -2,14 +2,14 @@
 
 Bu kontrol listesi iki Windows makinesinde (veya bir Windows + bir Linux)
 çalıştırılmalıdır. Linux CI'da backend/Tauri derlemesi doğrulanır; Windows
-WebView2, deep-link ve `bore.exe` davranışı burada elle test edilir.
+WebView2, deep-link ve Python bore tüneli burada elle test edilir.
 
 ## 1. Build / kurulum
 
 - GitHub Actions `Release & Build Setup.exe` (workflow_dispatch veya tag) ile
   Windows setup üret.
 - `pip install ... noiseprotocol` adımı release workflow'da mevcut.
-- Kurulumdan sonra `%LOCALAPPDATA%\CookieLauncher\bin\bore.exe` oluşmalı.
+- Harici `bore.exe` oluşmamalı; tünel Python istemcisiyle kurulur.
 - İlk açılışta Windows Defender/SmartScreen onayı gerekebilir.
 
 ## 2. Host
@@ -63,9 +63,8 @@ Kullanıcıya görünen bir “şifreli” göstergesi yok; şu davranışlar be
 ## 8. Windows'a özgü teknik kontroller
 
 - **Job Object:** Rust, backend sürecini `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
-  işaretli bir job'a atar. Launcher kapanır/çökerse backend ve onun `bore.exe`
-  çocukları da kapanır. Yine de Görev Yöneticisi'nde `bore.exe` kalmadığını
-  kontrol et.
+  işaretli bir job'a atar. Launcher kapanır/çökerse backend ve alt süreçleri
+  kapanır.
 - **Registry:** `HKCU\Software\Classes\cl` altında komut
   `"C:\...\CookieLauncher.exe" "%1"` biçiminde yazılır; `%1` tırnaklıdır.
   Derin link testinde yol boşluk içeren bir klasörde olmalı.
@@ -81,5 +80,5 @@ Kullanıcıya görünen bir “şifreli” göstergesi yok; şu davranışlar be
 
 - Windows'ta gerçek iki makine testi bu depoda otomatik değildir.
 - `%LOCALAPPDATA%` yolu ve portable ZIP farklı olabilir; portable sürümde
-  backend yanında `bore.exe` aranır.
+  harici tünel binary'si aranmaz.
 - SmartScreen imzasız build uyarısı verir.

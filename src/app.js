@@ -990,7 +990,6 @@ function switchTab(tabId) {
     loadInstances();
   } else if (tabId === "tab-friends") {
     loadSocialState(false);
-    ensureSocialRelay();
   }
 }
 
@@ -6232,7 +6231,7 @@ function renderSocial() {
     } else if (!connected && (error || !data)) {
       banner.hidden = false;
       banner.dataset.state = "error";
-      banner.innerHTML = `<span><strong>Sosyal bağlantı yok.</strong> ${socialEsc(error || "Relay'e bağlanılamadı.")}</span>
+      banner.innerHTML = `<span><strong>Sosyal relay kapalı.</strong> Arkadaş eklemek için Bağlan; bir davete katılmak için aşağıdaki kodu uygula. ${socialEsc(error || "")}</span>
         <button type="button" class="btn-secondary" data-social-start-relay>Bağlan</button>
         <button type="button" class="btn-secondary" data-social-settings>Bağlantı ayarları</button>`;
     } else {
@@ -6422,7 +6421,7 @@ function renderHostRelay(hr, invite) {
   } else {
     el.dataset.state = "starting";
     el.innerHTML = `<div class="social-host-relay-head"><span class="eyebrow">Host relay</span><span class="social-connection-pill" data-state="connecting">Başlatılıyor…</span></div>
-      <p class="social-hint">Ücretsiz bore tüneli açılıyor; ilk seferde bore indirilebilir.</p>`;
+      <p class="social-hint">Ücretsiz tünel açılıyor; harici uygulama indirilmez.</p>`;
   }
 }
 

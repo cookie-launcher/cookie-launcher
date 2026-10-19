@@ -31,7 +31,8 @@ Açık kaynak, hafif ve modern bir **Minecraft: Java Edition** başlatıcısı �
   - Arkadaşın dünyasına `quickPlayMultiplayer` ile doğrudan katılma.
   - Oyun trafiği host'ta kalır; sadece küçük bir relay üzerinden taşınır.
   - "Dünyayı paylaş"a basınca relay yoksa **otomatik** başlar; ücretsiz `bore.pub`
-    tüneli açılır, arkadaş adresi ekranda kopyalanabilir. bore yoksa otomatik indirilir.
+    tüneli açılır, arkadaş adresi ekranda kopyalanabilir. Harici `bore.exe`
+    gerekmez; tünel saf Python istemcisiyle kurulur.
   - **CL1 davet kodu**, `cl://join/...` deep link, panodan davet yakalama,
     token'lı binary TCP handshake.
   - Opsiyonel **Worker + KV** ile kısa kod: port değişse bile oda kodu sabit kalır;

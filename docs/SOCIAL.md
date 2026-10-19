@@ -60,7 +60,8 @@ aynı kalır; host launcher'ı açık olduğu sürece relay çalışır.
 İlk seferde `bore` binary'si yoksa launcher GitHub'dan indirip platforma uygun
 klasöre koyar:
 
-- **Windows:** `%LOCALAPPDATA%\CookieLauncher\bin\bore.exe`
+- **Windows:** Harici binary yok; `bore.pub` tüneli saf Python istemcisiyle
+  açılır (`share_relay.PythonBoreTunnel`).
 - **macOS:** `~/Library/Application Support/CookieLauncher/bin/bore`
 - **Linux:** `~/.cookie_launcher/bin/bore`
 

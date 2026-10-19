@@ -4,8 +4,8 @@
 Cookie Launcher — relay'i bu bilgisayarda çalıştırıp ücretsiz bore.pub tüneliyle aç.
 
 VPS/hesap/ödeme yok. Host launcher'ı açıkken relay çalışır; arkadaşlar
-bore.pub üzerinden bağlanır. Bore (MIT) tek bir Rust binary'sidir:
-https://github.com/ekzhang/bore
+bore.pub üzerinden bağlanır. bore.pub protokolü saf Python ile uygulanır;
+harici `bore.exe` indirilmez/çalıştırılmaz.
 
 Kullanım:
     python3 backend/share_relay.py
@@ -206,12 +206,149 @@ class Bore:
                 pass
 
 
+
+class PythonBoreTunnel:
+    """bore.pub istemcisini saf Python ile uygular.
+
+    Windows'ta ayrı bir `bore.exe` indirmeye/çalıştırmaya gerek kalmaz;
+    Defender'ın imzasız binary'yi engellemesi de ortadan kalkar.
+
+    Protokol (bore v0.6):
+      kontrol: {"Hello":0}\0  ->  {"Hello":public_port}\0
+      istek:   {"Connection":"uuid"}\0
+      veri:    {"Accept":"uuid"}\0 + ham TCP
+    """
+
+    CONTROL_PORT = 7835
+
+    def __init__(self, server: str, local_port: int, timeout: float = 15.0):
+        self.server = str(server or "bore.pub")
+        self.local_port = int(local_port)
+        self.public_host = self.server
+        self.public_port = 0
+        self.error = ""
+        self._stop = threading.Event()
+        self._sock = None
+        self._data_sockets = set()
+        self._lock = threading.Lock()
+        self._reader = None
+        self._connect(timeout)
+
+    def _connect(self, timeout):
+        self._sock = socket.create_connection((self.server, self.CONTROL_PORT), timeout=timeout)
+        self._sock.settimeout(timeout)
+        self._send({"Hello": 0})
+        msg = self._recv()
+        if not msg or "Hello" not in msg:
+            raise RuntimeError("bore.pub hello yanıtı gelmedi")
+        self.public_port = int(msg["Hello"])
+        if not self.public_port:
+            raise RuntimeError("bore.pub public port vermedi")
+        self._sock.settimeout(None)
+        self._reader = threading.Thread(target=self._read_loop, daemon=True, name="python-bore")
+        self._reader.start()
+
+    def _send(self, obj):
+        data = (json.dumps(obj, separators=(",", ":")) + "\0").encode("utf-8")
+        self._sock.sendall(data)
+
+    def _recv(self, sock=None, timeout=None):
+        sock = sock or self._sock
+        if timeout is not None:
+            sock.settimeout(timeout)
+        buf = b""
+        while b"\0" not in buf:
+            chunk = sock.recv(1)
+            if not chunk:
+                return None
+            buf += chunk
+        try:
+            return json.loads(buf.split(b"\0", 1)[0].decode("utf-8"))
+        except Exception:
+            return None
+
+    def _read_loop(self):
+        try:
+            while not self._stop.is_set():
+                msg = self._recv(self._sock)
+                if not msg:
+                    break
+                if "Heartbeat" in msg:
+                    continue
+                if "Connection" in msg:
+                    conn_id = str(msg["Connection"])
+                    threading.Thread(target=self._handle, args=(conn_id,), daemon=True).start()
+                elif "Error" in msg:
+                    self.error = str(msg["Error"])
+                    break
+        except Exception as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+        finally:
+            self._stop.set()
+
+    def _handle(self, conn_id):
+        data_sock = None
+        local = None
+        try:
+            data_sock = socket.create_connection((self.server, self.CONTROL_PORT), timeout=12)
+            data_sock.settimeout(12)
+            payload = (json.dumps({"Accept": conn_id}, separators=(",", ":")) + "\0").encode("utf-8")
+            data_sock.sendall(payload)
+            local = socket.create_connection(("127.0.0.1", self.local_port), timeout=8)
+            with self._lock:
+                self._data_sockets.add(data_sock)
+            self._pipe(data_sock, local)
+        except Exception:
+            pass
+        finally:
+            for sock_obj in (data_sock, local):
+                try:
+                    if sock_obj:
+                        sock_obj.close()
+                except Exception:
+                    pass
+            with self._lock:
+                self._data_sockets.discard(data_sock)
+
+    @staticmethod
+    def _pipe(a, b):
+        import select
+        try:
+            while True:
+                readable, _, _ = select.select([a, b], [], [], 1.0)
+                if not readable:
+                    continue
+                for src in readable:
+                    dst = b if src is a else a
+                    data = src.recv(65536)
+                    if not data:
+                        return
+                    dst.sendall(data)
+        except Exception:
+            return
+
+    def stop(self):
+        self._stop.set()
+        try:
+            if self._sock:
+                self._sock.close()
+        except Exception:
+            pass
+        with self._lock:
+            socks = list(self._data_sockets)
+        for sock_obj in socks:
+            try:
+                sock_obj.close()
+            except Exception:
+                pass
+
+
 class HostRelayRuntime:
     """Relay + bore'u aynı Python sürecinde çalıştırır.
 
     PyInstaller ile paketlenmiş Windows sürümünde ayrı bir Python yorumlayıcısı
-    olmadığı için relay alt süreç yerine thread içinde başlatılır; yalnızca
-    bore binary'si alt süreç olarak çalışır.
+    olmadığı için relay thread içinde başlatılır; tünel de saf Python
+    `PythonBoreTunnel` ile kurulur.
     """
 
     def __init__(self, data_path: str, bore_bin: str = "", bore_server: str = "bore.pub",
@@ -274,12 +411,16 @@ class HostRelayRuntime:
         if self.running and self.share:
             return dict(self.share)
         try:
-            binary = find_bore(self.bore_bin)
             self.local_control = self.local_control or free_port()
             self.local_tunnel = self.local_tunnel or free_port()
-            print("Ücretsiz bore tünelleri açılıyor...", file=sys.stderr, flush=True)
-            self.bore_ctl = Bore(binary, self.local_control, self.bore_server)
-            self.bore_tun = Bore(binary, self.local_tunnel, self.bore_server)
+            print("Ücretsiz bore tünelleri açılıyor (Python istemcisi)...", file=sys.stderr, flush=True)
+            self.bore_ctl = PythonBoreTunnel(self.bore_server, self.local_control)
+            try:
+                self.bore_tun = PythonBoreTunnel(self.bore_server, self.local_tunnel)
+            except Exception:
+                self.bore_ctl.stop()
+                self.bore_ctl = None
+                raise
             self.share = {
                 "host": self.bore_ctl.public_host,
                 "control_port": self.bore_ctl.public_port,
