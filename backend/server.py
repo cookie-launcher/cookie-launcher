@@ -323,6 +323,8 @@ ALLOWED_ORIGINS = {
     "http://127.0.0.1:8123",
     "http://localhost:8123",
     "http://localhost:1420",
+    "http://127.0.0.1:1430",
+    "http://localhost:1430",
 }
 MAX_POST_BYTES = 1024 * 1024
 
