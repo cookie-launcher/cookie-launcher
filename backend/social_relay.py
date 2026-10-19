@@ -26,6 +26,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import ssl
 import sys
 
@@ -73,6 +74,24 @@ def clean_id(value: Any) -> str:
 def clean_world(value: Any) -> str:
     world = re.sub(r"[\x00-\x1f\x7f]", "", str(value or "")).strip()
     return world[:64] or "Dünya"
+
+
+def clean_udp_candidate(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    ip = str(value.get("ip") or value.get("h") or "").strip()
+    try:
+        port = int(value.get("port") or value.get("p") or 0)
+    except Exception:
+        return {}
+    if not ip or not (1 <= port <= 65535):
+        return {}
+    try:
+        family = socket.AF_INET6 if ":" in ip else socket.AF_INET
+        socket.inet_pton(family, ip)
+    except Exception:
+        return {}
+    return {"ip": ip, "port": port}
 
 
 def make_code(existing: set[str]) -> str:
@@ -302,6 +321,7 @@ class Relay:
             "created": session["created"],
             "expires": session.get("invite_expires", session["expires"]),
             "noise_public": session.get("noise_public", ""),
+            "udp_candidate": session.get("udp_candidate", {}),
             "guests": list(session.get("guests", [])),
         }
 
@@ -624,6 +644,7 @@ class Relay:
                 "world": world,
                 "port": port,
                 "noise_public": str(msg.get("noise_public") or "")[:120],
+                "udp_candidate": clean_udp_candidate(msg.get("udp_candidate")),
                 "created": now(),
                 "expires": now() + SESSION_TTL,
                 "invite_expires": now() + INVITE_TTL,
@@ -675,6 +696,7 @@ class Relay:
                 "guest_reader": None,
                 "host_writer": None,
                 "guest_writer": None,
+                "guest_udp_candidate": clean_udp_candidate(msg.get("udp_candidate")),
                 "paired": False,
                 "event": asyncio.Event(),
                 "used": {},
@@ -693,6 +715,7 @@ class Relay:
                     "guest_id": pid,
                     "guest_name": self.store.player(pid)["name"],
                     "guest_noise_public": self.store.player(pid).get("noise_public", ""),
+                    "guest_udp_candidate": self.pairs[token].get("guest_udp_candidate", {}),
                 },
             )
             return {

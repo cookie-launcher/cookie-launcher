@@ -3,7 +3,8 @@
 > **Durum:** 1 + 2 + 3 + 4 uygulandı: `invite_code.py`, uzun/kısa CL1 kodu,
 > web fallback, panodan yakalama (arboard), `cl://` deep link/single-instance,
 > CLT1 binary HMAC handshake, Worker heartbeat/kısa kod, Noise_XX uçtan uca
-> şifreleme ve guest kimliğinin Noise son mesajına bağlanması. Worker
+> şifreleme, guest kimliğinin Noise son mesajına bağlanması ve STUN/UDP
+> hole-punching + bore fallback. Worker
 > deploy'u Cloudflare hesabı gerektirir; deploy edilmezse uzun kod fallback
 > otomatik devrede kalır.
 

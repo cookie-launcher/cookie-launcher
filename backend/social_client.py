@@ -33,6 +33,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from relay_handshake import ROLE_GUEST, ROLE_HOST, client_handshake
 from noise_layer import CHUNK, NoiseSession, generate_keypair, prologue_for, public_from_private
+from udp_punch import P2PSession, candidate as udp_candidate, punch_key
 try:
     from config import DEFAULT_RENDEZVOUS_URL
 except Exception:
@@ -157,6 +158,9 @@ class SocialClient:
         relay_tls: Optional[bool] = None,
         on_event: Optional[Callable[[Dict[str, Any]], None]] = None,
         enable_lan: bool = True,
+        enable_p2p: bool = True,
+        p2p_stun_servers=None,
+        p2p_allow_local: bool = False,
     ):
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
@@ -213,6 +217,10 @@ class SocialClient:
         self._lan_stop = threading.Event()
         self._lan_thread: Optional[threading.Thread] = None
         self._enable_lan = bool(enable_lan)
+        self._enable_p2p = bool(enable_p2p)
+        self._p2p_stun_servers = p2p_stun_servers
+        self._p2p_allow_local = bool(p2p_allow_local)
+        self._p2p_host: Optional[P2PSession] = None
 
     # ---------------------------------------------------------------- profile
     def _load_profile(self) -> Dict[str, Any]:
@@ -367,9 +375,15 @@ class SocialClient:
         except Exception:
             pass
         self._close_tunnels()
+        self._close_p2p_host()
         try:
             if self._join_listener:
                 self._join_listener.close()
+        except Exception:
+            pass
+        try:
+            if self._join_tunnel:
+                self._join_tunnel.close()
         except Exception:
             pass
         if self._thread:
@@ -713,7 +727,7 @@ class SocialClient:
                 ticket_id = msg.get("ticket_id")
                 if token and ticket_id:
                     threading.Thread(
-                        target=self._host_tunnel,
+                        target=self._host_session,
                         args=(
                             str(ticket_id),
                             str(token),
@@ -721,6 +735,7 @@ class SocialClient:
                             msg.get("session_id") or "",
                             msg.get("guest_id") or "",
                             msg.get("guest_noise_public") or "",
+                            msg.get("guest_udp_candidate") or {},
                             msg.get("guest_name") or "",
                         ),
                         daemon=True,
@@ -807,11 +822,14 @@ class SocialClient:
             raise SocialError(
                 "Bu portta açık bir dünya bulunamadı. Minecraft'ta dünyayı 'LAN'a aç' ile paylaşın."
             )
+        self._start_p2p_host()
+        relay_candidate = self._p2p_host.candidate if self._p2p_host is not None else {}
         result = self.call({
             "type": "world_share",
             "world": str(world or "Dünya")[:64],
             "port": port,
             "noise_public": self.noise_public,
+            "udp_candidate": relay_candidate,
         }, timeout=8)
         with self.lock:
             self.share = dict(result.get("session") or {})
@@ -831,6 +849,7 @@ class SocialClient:
             self.share = None
             self.share_port = 0
         self._close_tunnels()
+        self._close_p2p_host()
         self._emit("world_unshared", "Dünya paylaşımı kapatıldı.")
         return result
 
@@ -840,7 +859,24 @@ class SocialClient:
             raise SocialError("Davet bulunamadı.")
         # Önceki katılım varsa relay'e de bildir
         self.leave_world(notify=True)
-        result = self.call({"type": "world_join", "session_id": session_id}, timeout=12)
+        p2p: Optional[P2PSession] = None
+        guest_candidate: Dict[str, Any] = {}
+        if self._enable_p2p:
+            try:
+                p2p = P2PSession(
+                    session_id,
+                    stun_servers=self._p2p_stun_servers,
+                    allow_local=self._p2p_allow_local,
+                    timeout=2,
+                )
+                guest_candidate = p2p.candidate
+            except Exception:
+                p2p = None
+        result = self.call({
+            "type": "world_join",
+            "session_id": session_id,
+            "udp_candidate": guest_candidate,
+        }, timeout=12)
         token = str(result.get("token") or "")
         ticket_id = str(result.get("ticket_id") or "")
         if not token or not ticket_id:
@@ -848,6 +884,7 @@ class SocialClient:
         chosen_tunnel = result.get("local_tunnel_port") if self._relay_is_local() else result.get("tunnel_port")
         tunnel_port = int(chosen_tunnel or result.get("tunnel_port") or self.tunnel_port)
         joined_session = result.get("session") or {}
+        host_udp = udp_candidate(joined_session.get("udp_candidate"))
         noise_peer = str(joined_session.get("noise_public") or self.noise_peer_pub or "")
         if not noise_peer:
             raise SocialError("Host Noise anahtarı yok; daveti yeniden uygulayın.")
@@ -864,6 +901,56 @@ class SocialClient:
         def run() -> None:
             tunnel = None
             try:
+                if p2p is not None and host_udp:
+                    try:
+                        if p2p.punch(host_udp, punch_key(token, session_id), timeout=3):
+                            p2p.session_id = session_id
+                            stream = p2p.stream()
+                            if stream.start():
+                                stream.settimeout(4)
+                                noise = NoiseSession(
+                                    self.noise_private,
+                                    noise_peer,
+                                    prologue_for(session_id),
+                                )
+                                identity_payload = json.dumps({
+                                    "pid": str(self.profile.get("player_id") or ""),
+                                    "tid": ticket_id,
+                                    "sid": session_id,
+                                    "npub": self.noise_public,
+                                }, separators=(",", ":")).encode("utf-8")
+                                noise.handshake_initiator(stream, identity_payload)
+                                ack = noise.recv(stream)
+                                if ack != b"P2P_OK":
+                                    raise SocialError("Host P2P onayı gelmedi.")
+                                noise.send(stream, b"P2P_CONFIRM")
+                                stream.settimeout(None)
+                                with self.lock:
+                                    self._join_tunnel = stream
+                                paired.set()
+                                client, _ = listener.accept()
+                                try:
+                                    _pipe_noise(stream, client, noise)
+                                finally:
+                                    for sock_obj in (client, stream):
+                                        try:
+                                            sock_obj.close()
+                                        except Exception:
+                                            pass
+                                    with self.lock:
+                                        if self.joined and self.joined.get("local_port") == local_port:
+                                            self.joined = None
+                                    if self.connected:
+                                        try:
+                                            self.call({"type": "world_leave", "session_id": session_id}, timeout=4)
+                                        except Exception:
+                                            pass
+                                    self._emit("world_disconnected", "Dünya bağlantısı kapandı.")
+                                return
+                    except Exception:
+                        pass
+                if p2p is not None:
+                    p2p.close()
                 tunnel = self._open_tunnel_socket(tunnel_port)
                 client_handshake(tunnel, ticket_id, token, ROLE_GUEST)
                 tunnel.settimeout(20)
@@ -965,6 +1052,97 @@ class SocialClient:
             except Exception:
                 pass
 
+    def _start_p2p_host(self) -> None:
+        if not self._enable_p2p or self._p2p_host is not None:
+            return
+        try:
+            self._p2p_host = P2PSession(
+                "host",
+                stun_servers=self._p2p_stun_servers,
+                allow_local=self._p2p_allow_local,
+                timeout=2,
+            )
+        except Exception:
+            self._p2p_host = None
+
+    def _close_p2p_host(self) -> None:
+        p2p = self._p2p_host
+        self._p2p_host = None
+        if p2p is not None:
+            try:
+                p2p.close()
+            except Exception:
+                pass
+
+    def _host_session(self, ticket_id: str, token: str, port: int, session_id: str,
+                      guest_id: str, guest_noise_public: str, guest_udp_candidate: Dict[str, Any],
+                      guest_name: str) -> None:
+        if self._try_host_p2p(ticket_id, token, port, session_id, guest_id,
+                              guest_noise_public, guest_udp_candidate, guest_name):
+            return
+        self._host_tunnel(ticket_id, token, port, session_id, guest_id,
+                          guest_noise_public, guest_name)
+
+    def _validate_noise_identity(self, raw: bytes, guest_id: str, ticket_id: str,
+                                 session_id: str, guest_noise_public: str) -> None:
+        try:
+            identity = json.loads(raw.decode("utf-8")) if raw else {}
+        except Exception:
+            identity = {}
+        if str(identity.get("pid") or "") != str(guest_id or ""):
+            raise SocialError("Noise guest kimliği uyuşmuyor.")
+        if str(identity.get("tid") or "") != str(ticket_id or ""):
+            raise SocialError("Noise ticket kimliği uyuşmuyor.")
+        if str(identity.get("sid") or "") != str(session_id or ""):
+            raise SocialError("Noise oturum kimliği uyuşmuyor.")
+        if guest_noise_public and str(identity.get("npub") or "") != str(guest_noise_public):
+            raise SocialError("Noise guest anahtarı relay kaydıyla uyuşmuyor.")
+
+    def _try_host_p2p(self, ticket_id: str, token: str, port: int, session_id: str,
+                      guest_id: str, guest_noise_public: str, guest_udp: Dict[str, Any],
+                      guest_name: str) -> bool:
+        p2p = self._p2p_host
+        self._p2p_host = None
+        if p2p is None or not guest_udp:
+            if p2p is not None:
+                p2p.close()
+            return False
+        peer = udp_candidate(guest_udp)
+        if not peer:
+            p2p.close()
+            return False
+        try:
+            p2p.session_id = session_id
+            if not p2p.punch(peer, punch_key(token, session_id), timeout=3):
+                p2p.close()
+                return False
+            stream = p2p.stream()
+            if not stream.start():
+                stream.close()
+                return False
+            stream.settimeout(4)
+            noise = NoiseSession(self.noise_private, prologue=prologue_for(session_id))
+            identity_raw = noise.handshake_responder(stream)
+            self._validate_noise_identity(identity_raw, guest_id, ticket_id, session_id, guest_noise_public)
+            stream.settimeout(None)
+            mc = socket.create_connection(("127.0.0.1", port), timeout=8)
+            noise.send(stream, b"P2P_OK")
+            confirm = noise.recv(stream)
+            if confirm != b"P2P_CONFIRM":
+                raise SocialError("Guest P2P onayı gelmedi.")
+            stream.settimeout(None)
+            with self.lock:
+                self._active_tunnels.append((stream, mc))
+            self._emit("guest_joined", f"{guest_name or 'Bir arkadaş'} dünyana katıldı (P2P).")
+            _pipe_noise(stream, mc, noise)
+            return True
+        except Exception:
+            try:
+                p2p.close()
+            except Exception:
+                pass
+            return False
+
     def _host_tunnel(self, ticket_id: str, token: str, port: int, session_id: str,
                      guest_id: str, guest_noise_public: str, guest_name: str) -> None:
         if not port:
@@ -980,18 +1158,7 @@ class SocialClient:
                 prologue=prologue_for(session_id),
             )
             identity_raw = noise.handshake_responder(tunnel)
-            try:
-                identity = json.loads(identity_raw.decode("utf-8")) if identity_raw else {}
-            except Exception:
-                identity = {}
-            if str(identity.get("pid") or "") != str(guest_id or ""):
-                raise SocialError("Noise guest kimliği uyuşmuyor.")
-            if str(identity.get("tid") or "") != str(ticket_id or ""):
-                raise SocialError("Noise ticket kimliği uyuşmuyor.")
-            if str(identity.get("sid") or "") != str(session_id or ""):
-                raise SocialError("Noise oturum kimliği uyuşmuyor.")
-            if guest_noise_public and str(identity.get("npub") or "") != str(guest_noise_public):
-                raise SocialError("Noise guest anahtarı relay kaydıyla uyuşmuyor.")
+            self._validate_noise_identity(identity_raw, guest_id, ticket_id, session_id, guest_noise_public)
             tunnel.settimeout(None)
             mc = socket.create_connection(("127.0.0.1", port), timeout=8)
             with self.lock:

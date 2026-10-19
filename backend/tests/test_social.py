@@ -154,6 +154,7 @@ class SocialIntegrationTest(unittest.TestCase):
             relay_host="127.0.0.1",
             relay_port=self.relay.control_port,
             enable_lan=False,
+            enable_p2p=False,
         )
         c.update_profile(name=name)
         c.start()
@@ -215,6 +216,82 @@ class SocialIntegrationTest(unittest.TestCase):
         a.remove_friend(b_id)
         self.assertTrue(wait_for(lambda: not a.snapshot()["friends"] or all(f["player_id"] != b_id for f in a.snapshot()["friends"]), 5))
         self.assertTrue(wait_for(lambda: all(f["player_id"] != a.snapshot()["profile"]["player_id"] for f in b.snapshot()["friends"]), 5))
+
+    def test_p2p_udp_tunnel(self):
+        def make_p2p(name, sub):
+            c = SocialClient(
+                os.path.join(self.tmp.name, sub),
+                relay_host="127.0.0.1",
+                relay_port=self.relay.control_port,
+                enable_lan=False,
+                enable_p2p=True,
+                p2p_stun_servers=[],
+                p2p_allow_local=True,
+            )
+            c.update_profile(name=name)
+            c.start()
+            self.clients.append(c)
+            return c
+
+        a = make_p2p("P2PHost", "p2p-a")
+        b = make_p2p("P2PGuest", "p2p-b")
+        self.wait_connected(a, b)
+        self.befriend(a, b)
+        self.echo = EchoServer()
+        a.share_world("P2P Dünyası", self.echo.port)
+        self.assertTrue(wait_for(lambda: b.snapshot()["invites"], 5), "P2P daveti ulaşmadı")
+        b.join_world(b.snapshot()["invites"][0]["session_id"])
+        port = b.snapshot()["joined"]["local_port"]
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            sock.sendall(b"p2p")
+            received = b""
+            end = time.time() + 6
+            while time.time() < end and b"ECHO:p2p" not in received:
+                received += sock.recv(100)
+            self.assertEqual(received, b"ECHO:p2p")
+        finally:
+            sock.close()
+        self.assertTrue(wait_for(lambda: b.snapshot()["joined"] is None, 5))
+        self.assertIn("(P2P)", json.dumps(a.snapshot()["events"], ensure_ascii=False))
+        a.unshare_world()
+
+    def test_p2p_falls_back_to_relay(self):
+        def make(name, sub):
+            c = SocialClient(
+                os.path.join(self.tmp.name, sub),
+                relay_host="127.0.0.1",
+                relay_port=self.relay.control_port,
+                enable_lan=False,
+                enable_p2p=True,
+                p2p_stun_servers=[],
+            )
+            c.update_profile(name=name)
+            c.start()
+            self.clients.append(c)
+            return c
+
+        a = make("FallbackHost", "fb-a")
+        b = make("FallbackGuest", "fb-b")
+        self.wait_connected(a, b)
+        self.befriend(a, b)
+        self.echo = EchoServer()
+        a.share_world("Fallback Dünyası", self.echo.port)
+        self.assertTrue(wait_for(lambda: b.snapshot()["invites"], 5))
+        b.join_world(b.snapshot()["invites"][0]["session_id"])
+        port = b.snapshot()["joined"]["local_port"]
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            sock.sendall(b"fallback")
+            received = b""
+            end = time.time() + 6
+            while time.time() < end and b"ECHO:fallback" not in received:
+                received += sock.recv(100)
+            self.assertEqual(received, b"ECHO:fallback")
+        finally:
+            sock.close()
+        self.assertNotIn("(P2P)", json.dumps(a.snapshot()["events"], ensure_ascii=False))
+        a.unshare_world()
 
     def test_persistence_after_relay_restart(self):
         a = self.make_client("Ayse", "a")
@@ -296,6 +373,7 @@ class SocialIntegrationTest(unittest.TestCase):
             relay_host="127.0.0.1",
             relay_port=self.relay.control_port,
             enable_lan=False,
+            enable_p2p=False,
         )
         bad.start()
         self.clients.append(bad)

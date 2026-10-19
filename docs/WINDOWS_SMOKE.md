@@ -42,7 +42,15 @@ WebView2, deep-link ve `bore.exe` davranışı burada elle test edilir.
 - Host tekrar paylaşsın: uzun `CL1-ey...` kodu üretilmeli; paylaşım çalışmalı.
 - Worker URL'sini geri koy; yeni paylaşımda kısa kod dönmeli.
 
-## 6. Noise doğrulama
+## 6. P2P / fallback
+
+- İki makine farklı ağlardaysa host paylaşımında STUN keşfi çalışmalı.
+- Friend katılınca host olayında **“(P2P)”** görünmeli; trafik doğrudan UDP.
+- Symmetric NAT / STUN engeli varsa 3 sn sonra otomatik bore.pub fallback
+  çalışmalı; olayda “(P2P)” olmamalı ama oyun bağlantısı sürmeli.
+- `netstat -ano | findstr <port>` ile UDP soketinin açık olduğunu doğrula.
+
+## 7. Noise doğrulama
 
 Kullanıcıya görünen bir “şifreli” göstergesi yok; şu davranışlar beklenir:
 
@@ -52,7 +60,7 @@ Kullanıcıya görünen bir “şifreli” göstergesi yok; şu davranışlar be
 - `bore.pub` tarafında yalnızca şifreli byte'lar akar; paket yakalayıcıda
   `ECHO:` veya Minecraft paketi görünmemeli.
 
-## 7. Windows'a özgü teknik kontroller
+## 8. Windows'a özgü teknik kontroller
 
 - **Job Object:** Rust, backend sürecini `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
   işaretli bir job'a atar. Launcher kapanır/çökerse backend ve onun `bore.exe`
@@ -69,7 +77,7 @@ Kullanıcıya görünen bir “şifreli” göstergesi yok; şu davranışlar be
 - **CI:** `.github/workflows/windows-smoke.yml` Windows'ta backend testlerini,
   `cargo check`'i ve PyInstaller core'un `/api/health` yanıtını çalıştırır.
 
-## 8. Bilinen sınırlar
+## 9. Bilinen sınırlar
 
 - Windows'ta gerçek iki makine testi bu depoda otomatik değildir.
 - `%LOCALAPPDATA%` yolu ve portable ZIP farklı olabilir; portable sürümde

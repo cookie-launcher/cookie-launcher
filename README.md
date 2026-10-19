@@ -38,6 +38,8 @@ Açık kaynak, hafif ve modern bir **Minecraft: Java Edition** başlatıcısı �
     Worker yoksa uzun kod fallback.
   - **Noise_XX** uçtan uca şifreleme: host/guest Minecraft trafiği `bore.pub`
     üzerinden şifreli akar; relay sadece frame taşır.
+  - **P2P öncelikli hibrit:** STUN ile UDP delme denenir; 3 sn içinde olmazsa
+    otomatik olarak şifreli bore.pub relay'ine düşer.
   - Kurulum ve güvenlik: [`docs/SOCIAL.md`](docs/SOCIAL.md). Windows iki makine testi için:
 [`docs/WINDOWS_SMOKE.md`](docs/WINDOWS_SMOKE.md).
 

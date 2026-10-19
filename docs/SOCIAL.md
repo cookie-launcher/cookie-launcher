@@ -127,6 +127,21 @@ ile şifrelenir. Relay/bore yalnızca length-prefixed binary frame görür.
   ve guest Noise anahtarıyla karşılaştırır; uyuşmazsa bağlantı reddedilir.
 - Frame: `[uint16 length][Noise payload]`.
 
+## P2P öncelikli hibrit (STUN + UDP)
+
+1. Host dünyayı paylaşınca UDP soketi açar, STUN ile dış `IP:port` öğrenir.
+2. Guest aynı şekilde kendi adayını bulur; adaylar mevcut arkadaş relay'i
+   üzerinden (`world_share` / `world_join`) takas edilir.
+3. İki taraf eşzamanlı `CLP1` punch paketleri gönderir; paketler token'dan
+   türetilen 8 byte'lık anahtarla doğrulanır.
+4. Delme başarılıysa Noise_XX, UDP üzerindeki güvenilir `CLU1` stream üzerinden
+   kurulur; Minecraft trafiği doğrudan P2P akar.
+5. Punch 3 sn içinde çift yönlü olmazsa veya STUN başarısızsa mevcut şifreli
+   bore.pub tüneli kullanılır. Symmetric NAT bu fallback'i tetikler.
+
+`udp_stream.py` KCP benzeri minimal bir reliable UDP katmanıdır: sequence,
+kümülatif ACK, 64 paket pencere, RTO retransmit ve sıralı teslim.
+
 ## Relay'i internete açma
 
 Relay'i küçük bir VPS'e koyun (yalnızca Python 3 gerekir):

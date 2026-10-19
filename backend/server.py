@@ -3878,7 +3878,8 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
                                  "profile_detail", "content_toggle", "mod_deps",
                                  "profile_assets", "gallery_file", "social", "social_host_relay",
                                  "social_cl1", "social_clipboard", "social_binary_handshake",
-                                 "social_short_code", "social_rendezvous", "social_noise"],
+                                 "social_short_code", "social_rendezvous", "social_noise",
+                                 "social_p2p", "social_stun"],
                 })
                 return
 
