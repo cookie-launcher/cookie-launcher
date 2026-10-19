@@ -26,6 +26,13 @@
       "csp": "default-src 'self' blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http://127.0.0.1:* http://localhost:*; font-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:*; media-src 'self' https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["cl"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

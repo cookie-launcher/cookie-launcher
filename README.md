@@ -25,6 +25,21 @@ Açık kaynak, hafif ve modern bir **Minecraft: Java Edition** başlatıcısı �
   - Klasörleri doğrudan işletim sistemi dosya yöneticisinde açma.
 - **📜 Canlı Terminal / Konsol:**
   - Oyunun tüm Java çıktılarını ve çökme raporlarını gerçek zamanlı izleme.
+- **👥 Arkadaşlar (relay gerekir):**
+  - Arkadaş koduyla ekleme/çıkarma, karşılıklı istekler ve canlı çevrimiçi durum.
+  - Minecraft dünyasını LAN'a açıp arkadaşlara tek tıkla davet etme.
+  - Arkadaşın dünyasına `quickPlayMultiplayer` ile doğrudan katılma.
+  - Oyun trafiği host'ta kalır; sadece küçük bir relay üzerinden taşınır.
+  - "Dünyayı paylaş"a basınca relay yoksa **otomatik** başlar; ücretsiz `bore.pub`
+    tüneli açılır, arkadaş adresi ekranda kopyalanabilir. bore yoksa otomatik indirilir.
+  - **CL1 davet kodu**, `cl://join/...` deep link, panodan davet yakalama,
+    token'lı binary TCP handshake.
+  - Opsiyonel **Worker + KV** ile kısa kod: port değişse bile oda kodu sabit kalır;
+    Worker yoksa uzun kod fallback.
+  - **Noise_XX** uçtan uca şifreleme: host/guest Minecraft trafiği `bore.pub`
+    üzerinden şifreli akar; relay sadece frame taşır.
+  - Kurulum ve güvenlik: [`docs/SOCIAL.md`](docs/SOCIAL.md). Windows iki makine testi için:
+[`docs/WINDOWS_SMOKE.md`](docs/WINDOWS_SMOKE.md).
 
 ---
 
@@ -66,6 +81,27 @@ cookie-launcher-tauri/
 ```
 
 ---
+
+---
+
+## 👥 Arkadaşlar / Relay
+
+Arkadaş özelliği için küçük bir relay servisi gerekir. VPS istemiyorsan
+relay'i kendi bilgisayarında çalıştırıp ücretsiz `bore.pub` tüneliyle
+arkadaşlarına açabilirsin: `python3 backend/share_relay.py`.
+Ayrıntılar: [`docs/SOCIAL.md`](docs/SOCIAL.md). Windows iki makine testi için:
+[`docs/WINDOWS_SMOKE.md`](docs/WINDOWS_SMOKE.md).
+
+Yerel test:
+
+```bash
+python3 backend/social_relay.py --host 127.0.0.1 --control-port 19021 --tunnel-port 19022
+```
+
+Launcher'da **Arkadaşlar → Bağlantı** ekranından relay adresini girin. İnternet
+üzerinden kullanırken TLS'i açın; ayrıntılar ve VPS/systemd örneği:
+[`docs/SOCIAL.md`](docs/SOCIAL.md). Windows iki makine testi için:
+[`docs/WINDOWS_SMOKE.md`](docs/WINDOWS_SMOKE.md).
 
 ---
 

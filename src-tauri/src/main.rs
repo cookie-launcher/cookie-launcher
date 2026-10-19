@@ -8,6 +8,8 @@ use std::sync::Mutex;
 use std::net::TcpStream;
 use std::time::Duration;
 
+use tauri::Emitter;
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 #[cfg(unix)]
@@ -16,11 +18,168 @@ use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+#[cfg(windows)]
+fn register_cl_protocol() {
+    use windows_sys::Win32::Foundation::WIN32_ERROR;
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ,
+        RegCloseKey, RegCreateKeyExW, RegSetValueExW,
+    };
+
+    fn wide(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    unsafe fn create_key(path: &str) -> Option<HKEY> {
+        let name = wide(path);
+        let mut key: HKEY = std::ptr::null_mut();
+        let mut disposition = 0u32;
+        let result: WIN32_ERROR = RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            name.as_ptr(),
+            0,
+            std::ptr::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            std::ptr::null(),
+            &mut key,
+            &mut disposition,
+        );
+        if result == 0 { Some(key) } else { None }
+    }
+
+    unsafe fn set_value(key: HKEY, name: &str, value: &str) -> bool {
+        let value_name = wide(name);
+        let data: Vec<u8> = value
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect();
+        RegSetValueExW(
+            key,
+            value_name.as_ptr(),
+            0,
+            REG_SZ,
+            data.as_ptr(),
+            data.len() as u32,
+        ) == 0
+    }
+
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(_) => return,
+    };
+    let exe_text = exe.to_string_lossy();
+    // Windows'ta URL boşluk/özel karakter içerebilir; %1 mutlaka tırnaklı.
+    let command = format!("\"{}\" \"%1\"", exe_text);
+
+    unsafe {
+        if let Some(root) = create_key("Software\\Classes\\cl") {
+            let _ = set_value(root, "", "URL:Cookie Launcher Protocol");
+            let _ = set_value(root, "URL Protocol", "");
+            RegCloseKey(root);
+        }
+        if let Some(icon) = create_key("Software\\Classes\\cl\\DefaultIcon") {
+            let _ = set_value(icon, "", &format!("\"{}\",0", exe_text));
+            RegCloseKey(icon);
+        }
+        if let Some(cmd) = create_key("Software\\Classes\\cl\\shell\\open\\command") {
+            let _ = set_value(cmd, "", &command);
+            RegCloseKey(cmd);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn assign_backend_kill_job(child: &Child) {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
+    };
+
+    static JOB: Mutex<Option<isize>> = Mutex::new(None);
+    let existing = JOB.lock().ok().and_then(|slot| *slot);
+    let job: HANDLE = if let Some(raw) = existing {
+        raw as HANDLE
+    } else {
+        let created = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if created.is_null() {
+            return;
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ok = unsafe {
+            SetInformationJobObject(
+                created,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const core::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if ok == 0 {
+            unsafe { CloseHandle(created) };
+            return;
+        }
+        if let Ok(mut slot) = JOB.lock() {
+            *slot = Some(created as isize);
+        }
+        created
+    };
+    let process = child.as_raw_handle() as HANDLE;
+    let _ = unsafe { AssignProcessToJobObject(job, process) };
+}
+
 /// backend/server.py ile ayni olmali.
-const API_VERSION: u64 = 15;
+const API_VERSION: u64 = 19;
 const BACKEND_PORTS: [u16; 6] = [18420, 18421, 18422, 18423, 18424, 18425];
 
 static BACKEND_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+static STARTUP_INVITE: Mutex<Option<String>> = Mutex::new(None);
+
+/// `cl://join/CL1-...` veya düz `CL1-...` argümanından davet kodunu çıkarır.
+fn find_cl_invite<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
+    for raw in args {
+        let value = raw.trim().trim_matches('"').trim();
+        if let Some(pos) = value.find("CL1-") {
+            let code = &value[pos..];
+            let end = code
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                .unwrap_or(code.len());
+            if end > 4 {
+                return Some(code[..end].to_string());
+            }
+        }
+    }
+    None
+}
+
+/// WebView clipboard API'si her platformda güvenilir değil; arboard ile oku.
+#[tauri::command]
+fn check_clipboard_invite() -> Option<String> {
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let text = clipboard.get_text().ok()?;
+    let text = text.trim();
+    if let Some(pos) = text.find("CL1-") {
+        let code = &text[pos..];
+        let end = code
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .unwrap_or(code.len());
+        return Some(code[..end].to_string());
+    }
+    if text.contains("cookie-launcher.github.io/join") {
+        return Some(text.to_string());
+    }
+    None
+}
+
+/// İlk açılışta gelen cl:// davetini frontend bir kez alsın.
+#[tauri::command]
+fn take_startup_invite() -> Option<String> {
+    STARTUP_INVITE.lock().ok()?.take()
+}
 
 /// Calisan backend'in guncel API surumune sahip olup olmadigini kontrol eder.
 fn backend_health_ok(port: u16) -> bool {
@@ -187,6 +346,8 @@ fn start_backend_if_needed() -> Option<u16> {
         }
         match spawn_backend(&mut cmd) {
             Ok(child) => {
+                #[cfg(windows)]
+                assign_backend_kill_job(&child);
                 if let Ok(mut lock) = BACKEND_CHILD.lock() {
                     *lock = Some(child);
                 }
@@ -216,6 +377,8 @@ fn start_backend_if_needed() -> Option<u16> {
 
                 match spawn_backend(&mut cmd) {
                     Ok(child) => {
+                        #[cfg(windows)]
+                        assign_backend_kill_job(&child);
                         if let Ok(mut lock) = BACKEND_CHILD.lock() {
                             *lock = Some(child);
                         }
@@ -311,10 +474,35 @@ fn main() {
     #[cfg(unix)]
     install_signal_cleanup();
 
+    let startup_invite = find_cl_invite(std::env::args().skip(1));
+    if let Some(ref invite) = startup_invite {
+        if let Ok(mut slot) = STARTUP_INVITE.lock() {
+            *slot = Some(invite.clone());
+        }
+    }
+
     let _backend_port = start_backend_if_needed();
 
     let app = tauri::Builder::default()
-        .setup(|_app| Ok(()))
+        // single-instance ilk plugin olmali; yeni cl:// cagrisini ana pencereye yollar.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(invite) = find_cl_invite(argv.into_iter()) {
+                let _ = app.emit("cl-invite", invite);
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
+        .invoke_handler(tauri::generate_handler![
+            check_clipboard_invite,
+            take_startup_invite
+        ])
+        .setup(move |app| {
+            #[cfg(windows)]
+            register_cl_protocol();
+            if let Some(invite) = startup_invite.clone() {
+                let _ = app.emit("cl-invite", invite);
+            }
+            Ok(())
+        })
         .build(tauri::generate_context!())
         .expect("Tauri uygulamasi baslatilirken hata olustu");
 

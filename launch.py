@@ -9,15 +9,14 @@ import webbrowser
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 BACKEND_SCRIPT = os.path.join(PROJECT_DIR, "backend", "server.py")
-PORT = 18420
-URL = f"http://127.0.0.1:{PORT}"
-API_VERSION = 15
+PORTS = [18420, 18421, 18422, 18423, 18424, 18425]
+API_VERSION = 19
 
 
-def backend_health():
+def backend_health(port):
     """Yalnızca güncel API sürümüne sahip kendi backend'imizi kabul et."""
     try:
-        with urllib.request.urlopen(f"{URL}/api/health", timeout=1) as r:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1) as r:
             if r.status != 200:
                 return False
             data = json.loads(r.read().decode("utf-8"))
@@ -26,47 +25,56 @@ def backend_health():
         return False
 
 
+def find_backend_port():
+    for port in PORTS:
+        if backend_health(port):
+            return port
+    return None
+
+
 def start_backend():
-    if backend_health():
-        print(f"✓ CookieLauncher API zaten http://127.0.0.1:{PORT} üzerinde çalışıyor.")
-        return None
+    port = find_backend_port()
+    if port:
+        print(f"✓ CookieLauncher API zaten http://127.0.0.1:{port} üzerinde çalışıyor.")
+        return None, port
     print("🚀 CookieLauncher arka plan servisi başlatılıyor...")
     proc = subprocess.Popen([sys.executable, BACKEND_SCRIPT], cwd=PROJECT_DIR)
     # Sunucunun ayağa kalkmasını bekle (en fazla 4 saniye)
     for _ in range(20):
         time.sleep(0.2)
-        if backend_health():
-            print(f"✓ Sunucu hazır: {URL}")
-            return proc
+        port = find_backend_port()
+        if port:
+            print(f"✓ Sunucu hazır: http://127.0.0.1:{port}")
+            return proc, port
     print("⚠️ Sunucu yanıt vermedi; başlatma iptal ediliyor.")
     proc.terminate()
     try:
         proc.wait(timeout=3)
     except subprocess.TimeoutExpired:
         proc.kill()
-    return None
+    return None, None
 
 
-def open_app_window():
-    print(f"🌐 CookieLauncher GUI açılıyor: {URL}")
+def open_app_window(url):
+    print(f"🌐 CookieLauncher GUI açılıyor: {url}")
 
     # 1. Chrome / Chromium App Modu dene (Frameless pencereli görünüm)
     for browser in ["google-chrome", "chromium", "chromium-browser", "brave"]:
         try:
-            subprocess.Popen([browser, f"--app={URL}", "--window-size=1100,750"])
+            subprocess.Popen([browser, f"--app={url}", "--window-size=1100,750"])
             return
         except FileNotFoundError:
             pass
 
     # 2. Firefox Yeni Pencere dene
     try:
-        subprocess.Popen(["firefox", "--new-window", URL])
+        subprocess.Popen(["firefox", "--new-window", url])
         return
     except FileNotFoundError:
         pass
 
     # 3. Varsayılan sistem tarayıcısı
-    webbrowser.open(URL)
+    webbrowser.open(url)
 
 
 def main():
@@ -75,11 +83,11 @@ def main():
     print("=" * 60)
     backend_proc = None
     try:
-        backend_proc = start_backend()
-        if not backend_health():
+        backend_proc, port = start_backend()
+        if not port:
             print("Backend sağlıklı değil; GUI açılmıyor.")
             return
-        open_app_window()
+        open_app_window(f"http://127.0.0.1:{port}")
         print("\n💡 Native derleme: 'npm run tauri:build'")
         print("   Kapatmak için Ctrl+C.")
         if backend_proc:

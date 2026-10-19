@@ -1,0 +1,56 @@
+name: "Windows Smoke Test"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "master"]
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller requests minecraft-launcher-lib urllib3 certifi noiseprotocol
+
+      - name: Backend tests (Windows)
+        run: python -m unittest discover -s backend/tests -v
+
+      - name: Tauri check (Windows)
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Build standalone core
+        run: |
+          pyinstaller --onefile --name cookielauncher-core --collect-data certifi `
+            --hidden-import noise --collect-submodules noise `
+            --distpath backend --workpath build/pyinstaller --specpath build backend/server.py
+
+      - name: Start core and hit health endpoint
+        shell: pwsh
+        run: |
+          $core = Start-Process -FilePath "backend\cookielauncher-core.exe" -PassThru
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Milliseconds 300
+              try {
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:18420/api/health" -TimeoutSec 2
+                if ($health.api_version -ge 19) { $ok = $true; break }
+              } catch {}
+            }
+            if (-not $ok) { throw "Core health endpoint did not become ready" }
+            Write-Host "Core health OK: API $($health.api_version)"
+          } finally {
+            Stop-Process -Id $core.Id -Force -ErrorAction SilentlyContinue
+          }

@@ -75,6 +75,22 @@ const state = {
   instanceSort: localStorage.getItem("cl_instance_sort") || "created"
 };
 
+// Sosyal / Arkadaşlar UI durumu
+const socialUI = {
+  data: null,
+  timer: null,
+  loading: false,
+  initialized: false,
+  lastSeq: 0,
+  selectedLanPort: 0,
+  selectedLanName: "",
+  joinBusy: false,
+  shareBusy: false,
+  dismissedInvites: new Set(),
+  pendingClipboardInvite: "",
+  lastClipboardInvite: ""
+};
+
 // Backend'e erişilemezse gösterilecek yerel sürüm listesi (uygulama asla boş kalmasın)
 const FALLBACK_VERSIONS = [
   "26.3", "26.2", "26.1.2", "26.1.1", "26.1",
@@ -238,6 +254,13 @@ async function apiPost(path, body, timeoutMs = 15000) {
 }
 
 async function detectApiBase() {
+  // Gelistirme / iki istemci testi icin acik API adresi: ?api=http://127.0.0.1:18422
+  const override = new URLSearchParams(window.location.search).get("api");
+  if (override) {
+    API_BASE = String(override).replace(/\/$/, "");
+    updateApiStatusText();
+    return true;
+  }
   for (const port of [18420, 18421, 18422, 18423, 18424, 18425]) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 900);
@@ -249,7 +272,7 @@ async function detectApiBase() {
       if (res.ok) {
         const data = await res.json();
         // Eski/stale backend süreçlerini atla: yalnızca güncel API sürümü kabul
-        if (data && Number(data.api_version) >= 15) {
+        if (data && Number(data.api_version) >= 19) {
           API_BASE = `http://127.0.0.1:${port}`;
           updateApiStatusText();
           return true;
@@ -279,8 +302,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     await loadInstances();
     loadRecentWorlds();
     startStatusPolling();
+    startSocialPolling();
     setupTauriWindowControls();
     initProfileDetailScreen();
+    initSocialUI();
   } catch (err) {
     console.error("Başlatma hatası:", err);
     showToast("Launcher başlatılırken bir hata oluştu.", "error");
@@ -411,7 +436,7 @@ function setupGlobalShortcuts() {
     const mod = e.ctrlKey || e.metaKey;
 
     if (mod && !e.altKey) {
-      const tabMap = { "1": "tab-play", "2": "tab-instances", "3": "tab-modrinth", "4": "tab-gallery", "5": "tab-console" };
+      const tabMap = { "1": "tab-play", "2": "tab-instances", "3": "tab-modrinth", "4": "tab-gallery", "5": "tab-console", "6": "tab-friends" };
       if (tabMap[e.key]) {
         e.preventDefault();
         switchTab(tabMap[e.key]);
@@ -961,6 +986,8 @@ function switchTab(tabId) {
     loadScreenshots();
   } else if (tabId === "tab-instances") {
     loadInstances();
+  } else if (tabId === "tab-friends") {
+    loadSocialState(false);
   }
 }
 
@@ -2420,11 +2447,11 @@ function setProgressTexts(status, detail, mb) {
   }
 }
 
-async function handleLaunchGame() {
-  if (state.launchRequested) return;
+async function handleLaunchGame(opts = {}) {
+  if (state.launchRequested) return false;
 
   const btnLaunch = document.getElementById("btnLaunchGame");
-  if (btnLaunch && btnLaunch.disabled) return;
+  if (btnLaunch && btnLaunch.disabled) return false;
 
   const activeInst = getActiveInstance();
 
@@ -2434,7 +2461,7 @@ async function handleLaunchGame() {
     showToast("Başlatmak için önce bir profil oluşturun veya seçin.", "info");
     switchTab("tab-instances");
     setTimeout(() => openCreateInstanceModal(), 220);
-    return;
+    return false;
   }
 
   const versionToLaunch = activeInst.version;
@@ -2449,7 +2476,9 @@ async function handleLaunchGame() {
   setProgressBar(2);
   setProgressTexts(
     "Oyun hazırlanıyor...",
-    activeInst ? `"${activeInst.name}" profili başlatılıyor...` : "Arka plan servisine bağlanılıyor...",
+    opts.quickPlayMultiplayer
+      ? "Arkadaşının dünyasına bağlanılıyor..."
+      : (activeInst ? `"${activeInst.name}" profili başlatılıyor...` : "Arka plan servisine bağlanılıyor..."),
     0
   );
 
@@ -2462,6 +2491,9 @@ async function handleLaunchGame() {
     jvm_preset: "aikar"
   };
   payload.instance_id = activeInst.id;
+  if (opts.quickPlayMultiplayer) {
+    payload.quick_play_multiplayer = String(opts.quickPlayMultiplayer);
+  }
 
   let accepted = false;
   let backendError = null;
@@ -2487,7 +2519,7 @@ async function handleLaunchGame() {
     state.launchAcceptedAt = Date.now();
     setLastPlayed(activeInst.id);
     setProgressTexts("Başlatma isteği kabul edildi", "İndirme akışı arka planda sürüyor...", 0);
-    return;
+    return true;
   }
 
   // İstek kabul edilmedi: modalı kapat, butonu eski haline getir, tek seferlik bilgi ver
@@ -2496,6 +2528,7 @@ async function handleLaunchGame() {
   state.engineMode = "idle";
   setLaunchButton(getActiveInstance() ? "idle" : "noProfile");
   showErrorOnce(backendError || "Core servisine ulaşılamadı. Arka plan servisini yeniden başlatın.");
+  return false;
 }
 
 // ================== CANLI DURUM & İLERLEME POLLING ==================
@@ -6059,4 +6092,814 @@ async function pdsOpenLogViewer(file) {
   } else {
     out.textContent = ` ${(data && data.error) || "Kayıt okunamadı."}`;
   }
+}
+
+/* ==============================================================================
+   ARKADAŞLAR / SOSYAL
+   ============================================================================== */
+
+function socialEsc(value) {
+  return escapeHtml(value === null || value === undefined ? "" : value);
+}
+
+function socialFormatCode(code) {
+  const clean = String(code || "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  if (!clean) return "————";
+  if (clean.length === 8) return `${clean.slice(0, 4)}-${clean.slice(4)}`;
+  return clean;
+}
+
+function socialFormatTimeLeft(expires) {
+  const secs = Math.max(0, Number(expires || 0) - Date.now() / 1000);
+  if (!secs) return "süresi doldu";
+  const mins = Math.ceil(secs / 60);
+  if (mins >= 60) return `${Math.ceil(mins / 60)} sa kaldı`;
+  return `${mins} dk kaldı`;
+}
+
+function socialInitial(name) {
+  const ch = String(name || "?").trim().charAt(0);
+  return ch ? ch.toUpperCase() : "?";
+}
+
+function socialEmptyMarkup(title, desc, icon = "·") {
+  return `<div class="social-empty">
+    <div class="social-empty-icon">${socialEsc(icon)}</div>
+    <div class="social-empty-title">${socialEsc(title)}</div>
+    <div class="social-empty-desc">${socialEsc(desc)}</div>
+  </div>`;
+}
+
+function startSocialPolling() {
+  if (socialUI.timer) return;
+  loadSocialState(true);
+  socialUI.timer = setInterval(() => {
+    if (!document.hidden) loadSocialState(false);
+  }, 4000);
+}
+
+async function loadSocialState(initial = false) {
+  if (socialUI.loading) return;
+  socialUI.loading = true;
+  try {
+    const data = await apiGet("/api/social/state", 9000);
+    if (!data) {
+      socialUI.apiError = "Core servisine ulaşılamadı.";
+      renderSocial();
+      return;
+    }
+    if (data.success === false) {
+      socialUI.apiError = data.error || "Sosyal servis hazır değil.";
+      renderSocial();
+      return;
+    }
+    socialUI.apiError = "";
+    socialUI.data = data;
+    const events = Array.isArray(data.events) ? data.events : [];
+    if (!socialUI.initialized) {
+      socialUI.initialized = true;
+      socialUI.lastSeq = events.reduce((max, e) => Math.max(max, Number(e.seq) || 0), 0);
+    } else {
+      let newest = socialUI.lastSeq;
+      events.forEach((ev) => {
+        const seq = Number(ev.seq) || 0;
+        if (seq <= socialUI.lastSeq) return;
+        newest = Math.max(newest, seq);
+        if (ev.message) {
+          const kind = String(ev.kind || "");
+          const type = kind.includes("failed") || kind.includes("error") ? "error"
+            : kind === "world_invite" || kind === "friend_request" || kind === "friend_accepted" ? "info"
+              : "success";
+          showToast(String(ev.message), type);
+        }
+      });
+      socialUI.lastSeq = newest;
+    }
+    renderSocial();
+  } finally {
+    socialUI.loading = false;
+  }
+}
+
+function renderSocial() {
+  const data = socialUI.data;
+  const connected = !!(data && data.connected);
+  const pill = document.getElementById("socialConnectionPill");
+  if (pill) {
+    pill.dataset.state = connected ? "online" : (data && data.error ? "offline" : "connecting");
+    pill.textContent = connected ? "Relay bağlı" : (data && data.error ? "Bağlantı yok" : "Bağlanıyor…");
+  }
+
+  const banner = document.getElementById("socialBanner");
+  if (banner) {
+    const error = socialUI.apiError || (data && data.error) || "";
+    if (!connected && (error || !data)) {
+      banner.hidden = false;
+      banner.dataset.state = "error";
+      banner.innerHTML = `<span><strong>Sosyal bağlantı yok.</strong> ${socialEsc(error || "Relay'e bağlanılamadı. Ayarlardan adresi kontrol et.")}</span>
+        <button type="button" class="btn-secondary" data-social-settings>Bağlantı ayarları</button>`;
+    } else {
+      banner.hidden = true;
+      banner.innerHTML = "";
+    }
+  }
+
+  const code = (data && ((data.profile && data.profile.code) || (data.you && data.you.code))) || "";
+  const codeBtn = document.getElementById("socialCopyCode");
+  if (codeBtn) {
+    codeBtn.textContent = socialFormatCode(code);
+    codeBtn.disabled = !code;
+  }
+  const addBtn = document.getElementById("socialAddBtn");
+  const addInput = document.getElementById("socialAddCode");
+  if (addBtn) addBtn.disabled = !connected;
+  if (addInput) addInput.disabled = !connected;
+
+  const friends = (data && Array.isArray(data.friends)) ? data.friends : [];
+  const requests = (data && data.requests) || { in: [], out: [] };
+  const invites = (data && Array.isArray(data.invites)) ? data.invites : [];
+  const joined = (data && data.joined) || null;
+  const incoming = Array.isArray(requests.in) ? requests.in : [];
+  const outgoing = Array.isArray(requests.out) ? requests.out : [];
+  const online = friends.filter(f => f.online).length;
+
+  const count = document.getElementById("socialFriendCount");
+  if (count) count.textContent = String(friends.length);
+  const summary = document.getElementById("socialPresenceSummary");
+  if (summary) {
+    summary.textContent = friends.length
+      ? `${online} çevrimiçi • ${friends.length - online} çevrimdışı`
+      : "Henüz arkadaş yok.";
+  }
+
+  const friendsList = document.getElementById("socialFriendsList");
+  if (friendsList) {
+    if (!friends.length) {
+      friendsList.innerHTML = socialEmptyMarkup(
+        connected ? "Henüz arkadaşın yok" : "Arkadaş listesi yükleniyor",
+        connected ? "Arkadaşının kodunu yukarıya girerek başla." : "Relay bağlantısı kurulunca arkadaşların burada görünecek.",
+        "＋"
+      );
+    } else {
+      friendsList.innerHTML = friends.map((f) => {
+        const fid = socialEsc(f.player_id);
+        const name = socialEsc(f.name || "Oyuncu");
+        const online = !!f.online;
+        const status = String(f.status || (online ? "menu" : "offline"));
+        const isPlaying = status === "playing";
+        const meta = online
+          ? (isPlaying ? `Oyunda${f.detail ? ` • ${socialEsc(f.detail)}` : ""}` : "Çevrimiçi")
+          : "Çevrimdışı";
+        const invite = invites.find((iv) => iv.host_id === f.player_id);
+        const isJoined = !!(joined && (invite ? joined.session_id === invite.session_id : joined.host_id === f.player_id));
+        return `<div class="social-friend" data-online="${online ? "1" : "0"}" data-status="${socialEsc(status)}">
+          <div class="social-avatar">${socialEsc(socialInitial(f.name))}</div>
+          <div class="social-friend-info">
+            <div class="social-friend-name">${name}</div>
+            <div class="social-friend-meta" data-online="${online ? "1" : "0"}" data-status="${socialEsc(status)}">${meta}</div>
+          </div>
+          <div class="social-friend-actions">
+            ${invite && !isJoined ? `<button type="button" class="social-mini-btn primary" data-social-action="join" data-session-id="${socialEsc(invite.session_id)}" ${socialUI.joinBusy ? "disabled" : ""}>Katıl</button>` : ""}
+            ${isJoined ? `<button type="button" class="social-mini-btn" data-social-action="leave" data-session-id="${socialEsc(joined.session_id)}">Bağlısın</button>` : ""}
+            <button type="button" class="social-mini-btn danger" data-social-action="remove" data-player-id="${fid}" data-player-name="${name}">Çıkar</button>
+          </div>
+        </div>`;
+      }).join("");
+    }
+  }
+
+  const requestPanel = document.getElementById("socialRequestsPanel");
+  const requestList = document.getElementById("socialRequestsList");
+  const requestCount = document.getElementById("socialRequestCount");
+  const totalRequests = incoming.length + outgoing.length;
+  if (requestCount) requestCount.textContent = String(totalRequests);
+  if (requestPanel) requestPanel.hidden = totalRequests === 0;
+  if (requestList) {
+    let html = "";
+    incoming.forEach((r) => {
+      html += `<div class="social-request">
+        <div class="social-avatar">${socialEsc(socialInitial(r.name))}</div>
+        <div class="social-request-info">
+          <div class="social-request-name">${socialEsc(r.name || "Oyuncu")}</div>
+          <div class="social-request-sub">sana istek gönderdi</div>
+        </div>
+        <div class="social-friend-actions">
+          <button type="button" class="social-mini-btn primary" data-social-action="accept" data-player-id="${socialEsc(r.player_id)}">Kabul et</button>
+          <button type="button" class="social-mini-btn" data-social-action="decline" data-player-id="${socialEsc(r.player_id)}">Reddet</button>
+        </div>
+      </div>`;
+    });
+    outgoing.forEach((r) => {
+      html += `<div class="social-request">
+        <div class="social-avatar">${socialEsc(socialInitial(r.name))}</div>
+        <div class="social-request-info">
+          <div class="social-request-name">${socialEsc(r.name || "Oyuncu")}</div>
+          <div class="social-request-sub">istek gönderildi • yanıt bekleniyor</div>
+        </div>
+        <span class="social-connection-pill" data-state="connecting">Bekliyor</span>
+      </div>`;
+    });
+    requestList.innerHTML = html || socialEmptyMarkup("İstek yok", "Yeni arkadaşlık istekleri burada görünür.", "＋");
+  }
+
+  const invitesList = document.getElementById("socialInvitesList");
+  if (invitesList) {
+    const visible = invites.filter((iv) => !socialUI.dismissedInvites?.has(iv.session_id));
+    const cards = visible.map((iv) => {
+      const isJoined = !!(joined && joined.session_id === iv.session_id);
+      return `<div class="social-invite">
+        <div class="social-invite-top">
+          <div class="social-avatar">${socialEsc(socialInitial(iv.host_name))}</div>
+          <div class="social-invite-info">
+            <div class="social-invite-name">${socialEsc(iv.host_name || "Arkadaş")}</div>
+            <div class="social-invite-world">${socialEsc(iv.world || "Dünya")} • ${socialEsc(isJoined ? "bağlısın" : socialFormatTimeLeft(iv.expires))}</div>
+          </div>
+        </div>
+        <div class="social-invite-actions">
+          ${isJoined
+            ? `<button type="button" class="social-mini-btn primary" data-social-action="leave" data-session-id="${socialEsc(iv.session_id)}">Bağlantıyı kes</button>`
+            : `<button type="button" class="social-mini-btn primary" data-social-action="join" data-session-id="${socialEsc(iv.session_id)}" ${socialUI.joinBusy ? "disabled" : ""}>Dünyaya katıl</button>
+               <button type="button" class="social-mini-btn" data-social-action="dismiss" data-session-id="${socialEsc(iv.session_id)}">Sonra</button>`}
+        </div>
+      </div>`;
+    });
+    const joinedAlreadyListed = !!(joined && visible.some((iv) => iv.session_id === joined.session_id));
+    if (joined && !joinedAlreadyListed) {
+      cards.unshift(`<div class="social-invite">
+        <div class="social-invite-top">
+          <div class="social-avatar">${socialEsc(socialInitial(joined.host_name))}</div>
+          <div class="social-invite-info">
+            <div class="social-invite-name">${socialEsc(joined.host_name || "Arkadaş")}</div>
+            <div class="social-invite-world">${socialEsc(joined.world || "Dünya")} • bağlısın</div>
+          </div>
+        </div>
+        <div class="social-invite-actions">
+          <button type="button" class="social-mini-btn primary" data-social-action="leave" data-session-id="${socialEsc(joined.session_id)}">Bağlantıyı kes</button>
+        </div>
+      </div>`);
+    }
+    if (!cards.length) {
+      invitesList.innerHTML = socialEmptyMarkup(
+        "Davet yok",
+        "Bir arkadaşın dünyasını paylaştığında burada görünür.",
+        "◇"
+      );
+    } else {
+      invitesList.innerHTML = cards.join("");
+    }
+  }
+
+  renderSocialShare(data);
+  renderHostRelay(data && data.host_relay, data && data.invite);
+  renderSocialNavDot(incoming.length + invites.length);
+}
+
+function renderHostRelay(hr, invite) {
+  const el = document.getElementById("socialHostRelay");
+  if (!el) return;
+  const share = hr && hr.share;
+  if (!hr || (!share && !hr.running && !hr.error)) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  el.hidden = false;
+  if (share) {
+    el.dataset.state = "ready";
+    const addr = `${share.host || "bore.pub"}:${share.control_port || ""}`;
+    el.innerHTML = `<div class="social-host-relay-head">
+        <span class="eyebrow">Ücretsiz relay</span>
+        <span class="social-connection-pill" data-state="online">Hazır</span>
+      </div>
+      <div class="social-host-relay-address"><code>${socialEsc(addr)}</code></div>
+      <div class="social-host-relay-actions">
+        <button type="button" class="social-mini-btn primary" data-social-action="copy-invite" ${invite ? "" : "disabled"}>Davet kodu</button>
+        <button type="button" class="social-mini-btn" data-social-action="copy-relay">Adres</button>
+        <button type="button" class="social-mini-btn danger" data-social-action="stop-host-relay">Kapat</button>
+      </div>
+      <p class="social-hint">${invite ? "Davet kodunu arkadaşlarına gönder; Arkadaşlar → Daveti uygula ile tek adımda bağlanırlar." : "Arkadaşların Bağlantı ekranına bu adresi girsin."} Senin launcher'ın otomatik olarak yerel relay'e bağlı.</p>`;
+  } else if (hr.error) {
+    el.dataset.state = "error";
+    el.innerHTML = `<div class="social-host-relay-head"><span class="eyebrow">Host relay</span></div>
+      <p class="social-hint">${socialEsc(hr.error)}</p>`;
+  } else {
+    el.dataset.state = "starting";
+    el.innerHTML = `<div class="social-host-relay-head"><span class="eyebrow">Host relay</span><span class="social-connection-pill" data-state="connecting">Başlatılıyor…</span></div>
+      <p class="social-hint">Ücretsiz bore tüneli açılıyor; ilk seferde bore indirilebilir.</p>`;
+  }
+}
+
+function renderSocialShare(data) {
+  const idle = document.getElementById("socialShareIdle");
+  const active = document.getElementById("socialShareActive");
+  if (!idle || !active) return;
+  const share = data && data.share;
+  if (share) {
+    idle.hidden = true;
+    active.hidden = false;
+    const guests = Array.isArray(share.guests) ? share.guests.length : 0;
+    active.innerHTML = `<div class="social-share-active">
+      <div class="social-share-status">
+        <div class="social-share-status-text">
+          <strong>${socialEsc(share.world || "Dünya")}</strong>
+          Port ${socialEsc(share.port)} • ${guests ? `${guests} arkadaş bağlı` : "arkadaşların davet listesinde"}
+        </div>
+      </div>
+      <button type="button" class="btn-secondary social-wide-btn" data-social-action="unshare">Paylaşımı kapat</button>
+      <p class="social-hint">Davet, çevrimiçi arkadaşlarına otomatik gönderildi. Arkadaşın katılınca Minecraft'ta dünyana bağlanır.</p>
+    </div>`;
+  } else {
+    idle.hidden = false;
+    active.hidden = true;
+    active.innerHTML = "";
+    const lanWrap = document.getElementById("socialLanWorlds");
+    const worlds = (data && Array.isArray(data.lan_worlds)) ? data.lan_worlds : [];
+    if (lanWrap) {
+      if (!worlds.length) {
+        lanWrap.innerHTML = `<div class="social-lan-empty">Açık LAN dünyası bulunamadı. Minecraft'ta dünyanı LAN'a açtığında burada görünür.</div>`;
+      } else {
+        lanWrap.innerHTML = worlds.map((w) => `<button type="button" class="social-lan-world${socialUI.selectedLanPort === Number(w.port) ? " active" : ""}"
+          data-lan-port="${Number(w.port)}" data-lan-name="${socialEsc(w.motd || "Minecraft dünyası")}">
+          <span class="social-lan-world-name">${socialEsc(w.motd || "Minecraft dünyası")}</span>
+          <span class="social-lan-world-port">:${Number(w.port)}</span>
+        </button>`).join("");
+      }
+    }
+  }
+}
+
+function renderSocialNavDot(count) {
+  const dot = document.getElementById("socialNavDot");
+  if (dot) dot.hidden = count <= 0;
+}
+
+async function socialAddFriend() {
+  const input = document.getElementById("socialAddCode");
+  const btn = document.getElementById("socialAddBtn");
+  if (!input || !btn) return;
+  const code = input.value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  if (code.length < 6) {
+    showToast("Geçerli bir arkadaş kodu gir.", "info");
+    input.focus();
+    return;
+  }
+  btn.disabled = true;
+  const data = await apiPost("/api/social/friend/add", { code }, 15000);
+  btn.disabled = false;
+  if (!data || data.success === false) {
+    showToast((data && data.error) || "Arkadaşlık isteği gönderilemedi.", "error");
+    return;
+  }
+  input.value = "";
+  const stateText = data.result && data.result.state;
+  if (stateText === "accepted") showToast("Arkadaş eklendi.", "success");
+  else if (stateText === "pending") showToast("İstek zaten bekliyor.", "info");
+  else showToast("Arkadaşlık isteği gönderildi.", "success");
+  await loadSocialState(true);
+}
+
+async function socialRespondFriend(playerId, accept) {
+  const data = await apiPost("/api/social/friend/respond", { player_id: playerId, accept: !!accept }, 15000);
+  if (!data || data.success === false) {
+    showToast((data && data.error) || "İstek yanıtlanamadı.", "error");
+    return;
+  }
+  showToast(accept ? "Arkadaş eklendi." : "İstek reddedildi.", accept ? "success" : "info");
+  await loadSocialState(true);
+}
+
+async function socialRemoveFriend(playerId, name) {
+  const ok = await showConfirmDialog({
+    title: "Arkadaşlıktan çıkar",
+    message: `"${name || "Oyuncu"}" arkadaş listenden çıkarılacak. Emin misin?`,
+    okText: "Çıkar",
+    danger: true
+  });
+  if (!ok) return;
+  const data = await apiPost("/api/social/friend/remove", { player_id: playerId }, 15000);
+  if (!data || data.success === false) {
+    showToast((data && data.error) || "Arkadaş çıkarılamadı.", "error");
+    return;
+  }
+  showToast("Arkadaş listenden çıkarıldı.", "info");
+  await loadSocialState(true);
+}
+
+async function socialShareWorld() {
+  if (socialUI.shareBusy) return;
+  const nameInput = document.getElementById("socialWorldName");
+  const portInput = document.getElementById("socialWorldPort");
+  const btn = document.getElementById("socialShareBtn");
+  const world = (nameInput && nameInput.value.trim()) || "Dünya";
+  const port = Number(portInput && portInput.value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    showToast("Geçerli bir LAN portu gir.", "info");
+    portInput?.focus();
+    return;
+  }
+  socialUI.shareBusy = true;
+  const needsRelay = !(socialUI.data && socialUI.data.connected);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = needsRelay ? "Ücretsiz relay başlatılıyor…" : "Açılıyor…";
+  }
+  const data = await apiPost("/api/social/world/share", { world, port }, 120000);
+  socialUI.shareBusy = false;
+  if (btn) { btn.disabled = false; btn.textContent = "Dünyayı arkadaşlarına aç"; }
+  if (!data || data.success === false) {
+    showToast((data && data.error) || "Dünya paylaşılamadı.", "error");
+    return;
+  }
+  showToast("Dünya arkadaşlarına açıldı.", "success");
+  await loadSocialState(true);
+}
+
+async function socialUnshareWorld() {
+  const data = await apiPost("/api/social/world/unshare", {}, 15000);
+  if (!data || data.success === false) {
+    showToast((data && data.error) || "Paylaşım kapatılamadı.", "error");
+    return;
+  }
+  showToast("Dünya paylaşımı kapatıldı.", "info");
+  await loadSocialState(true);
+}
+
+async function socialJoinWorld(sessionId) {
+  if (!sessionId || socialUI.joinBusy) return;
+  if (!getActiveInstance()) {
+    showToast("Katılmak için önce bir profil seç.", "info");
+    switchTab("tab-instances");
+    return;
+  }
+  socialUI.joinBusy = true;
+  renderSocial();
+  const data = await apiPost("/api/social/world/join", { session_id: sessionId }, 50000);
+  if (!data || data.success === false) {
+    socialUI.joinBusy = false;
+    showToast((data && data.error) || "Dünyaya katılınamadı.", "error");
+    return;
+  }
+  const localPort = data.result && data.result.local_port;
+  if (!localPort) {
+    socialUI.joinBusy = false;
+    showToast("Yerel bağlantı portu alınamadı.", "error");
+    return;
+  }
+  showToast("Dünyaya bağlanılıyor, Minecraft açılıyor…", "success");
+  const launched = await handleLaunchGame({ quickPlayMultiplayer: `127.0.0.1:${localPort}` });
+  socialUI.joinBusy = false;
+  if (!launched) {
+    await apiPost("/api/social/world/leave", {}, 8000);
+  }
+  await loadSocialState(true);
+}
+
+async function socialLeaveWorld() {
+  await apiPost("/api/social/world/leave", {}, 8000);
+  await loadSocialState(true);
+}
+
+async function socialCopyCode() {
+  const code = ((socialUI.data && socialUI.data.profile && socialUI.data.profile.code) ||
+    (socialUI.data && socialUI.data.you && socialUI.data.you.code) || "").replace(/[^A-Za-z0-9]/g, "");
+  if (!code) return;
+  const pretty = socialFormatCode(code);
+  try {
+    await navigator.clipboard.writeText(pretty);
+    showToast(`Arkadaş kodu kopyalandı: ${pretty}`, "success");
+  } catch (_) {
+    const ta = document.createElement("textarea");
+    ta.value = pretty;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+      showToast(`Arkadaş kodu kopyalandı: ${pretty}`, "success");
+    } catch (err) {
+      showToast(`Arkadaş kodun: ${pretty}`, "info");
+    }
+    ta.remove();
+  }
+}
+
+function openSocialSettings() {
+  const data = socialUI.data || {};
+  const profile = data.profile || {};
+  const relay = data.relay || {};
+  const nameEl = document.getElementById("socialSettingsName");
+  const hostEl = document.getElementById("socialSettingsHost");
+  const portEl = document.getElementById("socialSettingsPort");
+  const tlsEl = document.getElementById("socialSettingsTls");
+  const rendezvousEl = document.getElementById("socialSettingsRendezvous");
+  if (nameEl) nameEl.value = profile.name || state.username || "";
+  if (hostEl) hostEl.value = relay.host || profile.relay_host || "127.0.0.1";
+  if (portEl) portEl.value = relay.port || profile.relay_port || 19021;
+  if (tlsEl) tlsEl.checked = !!profile.relay_tls;
+  if (rendezvousEl) rendezvousEl.value = profile.rendezvous_url || "";
+  const modal = document.getElementById("socialSettingsModal");
+  if (modal) {
+    modal.style.display = "flex";
+    modal.setAttribute("aria-hidden", "false");
+    nameEl?.focus();
+  }
+}
+
+function closeSocialSettings() {
+  const modal = document.getElementById("socialSettingsModal");
+  if (modal) {
+    modal.style.display = "none";
+    modal.setAttribute("aria-hidden", "true");
+  }
+}
+
+async function saveSocialSettings() {
+  const name = (document.getElementById("socialSettingsName")?.value || "").trim();
+  const host = (document.getElementById("socialSettingsHost")?.value || "").trim();
+  const port = Number(document.getElementById("socialSettingsPort")?.value || 0);
+  const tls = !!document.getElementById("socialSettingsTls")?.checked;
+  const rendezvousUrl = (document.getElementById("socialSettingsRendezvous")?.value || "").trim();
+  if (!name) {
+    showToast("Görünen ad boş olamaz.", "info");
+    return;
+  }
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+    showToast("Relay adresi ve portu geçerli olmalı.", "info");
+    return;
+  }
+  const data = await apiPost("/api/social/profile", {
+    name, relay_host: host, relay_port: port, tls, rendezvous_url: rendezvousUrl
+  }, 20000);
+  if (!data || data.success === false) {
+    showToast((data && data.error) || "Ayarlar kaydedilemedi.", "error");
+    return;
+  }
+  socialUI.data = data;
+  closeSocialSettings();
+  showToast("Sosyal ayarlar kaydedildi.", "success");
+  renderSocial();
+  await loadSocialState(true);
+}
+
+function initSocialUI() {
+  document.getElementById("socialRefreshBtn")?.addEventListener("click", () => loadSocialState(true));
+  document.getElementById("socialSettingsBtn")?.addEventListener("click", openSocialSettings);
+  document.getElementById("socialSettingsClose")?.addEventListener("click", closeSocialSettings);
+  document.getElementById("socialSettingsCancel")?.addEventListener("click", closeSocialSettings);
+  document.getElementById("socialSettingsSave")?.addEventListener("click", saveSocialSettings);
+  document.getElementById("socialCopyCode")?.addEventListener("click", socialCopyCode);
+  document.getElementById("socialAddBtn")?.addEventListener("click", socialAddFriend);
+  document.getElementById("socialAddCode")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      socialAddFriend();
+    }
+  });
+  document.getElementById("socialShareBtn")?.addEventListener("click", socialShareWorld);
+  document.getElementById("socialBanner")?.addEventListener("click", (e) => {
+    if (e.target.closest("[data-social-settings]")) openSocialSettings();
+  });
+  document.getElementById("socialSettingsModal")?.addEventListener("click", (e) => {
+    if (e.target.id === "socialSettingsModal") closeSocialSettings();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeSocialSettings();
+  });
+
+  document.getElementById("socialLanWorlds")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-lan-port]");
+    if (!btn) return;
+    const port = Number(btn.dataset.lanPort);
+    const name = btn.dataset.lanName || "Minecraft dünyası";
+    socialUI.selectedLanPort = port;
+    socialUI.selectedLanName = name;
+    const nameInput = document.getElementById("socialWorldName");
+    const portInput = document.getElementById("socialWorldPort");
+    if (nameInput) nameInput.value = name;
+    if (portInput) portInput.value = String(port);
+    renderSocialShare(socialUI.data);
+  });
+
+  document.getElementById("socialFriendsList")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-social-action]");
+    if (!btn) return;
+    const action = btn.dataset.socialAction;
+    if (action === "join") socialJoinWorld(btn.dataset.sessionId);
+    else if (action === "leave") socialLeaveWorld();
+    else if (action === "remove") socialRemoveFriend(btn.dataset.playerId, btn.dataset.playerName);
+  });
+
+  document.getElementById("socialRequestsList")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-social-action]");
+    if (!btn) return;
+    const action = btn.dataset.socialAction;
+    if (action === "accept") socialRespondFriend(btn.dataset.playerId, true);
+    else if (action === "decline") socialRespondFriend(btn.dataset.playerId, false);
+  });
+
+  document.getElementById("socialInvitesList")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-social-action]");
+    if (!btn) return;
+    const action = btn.dataset.socialAction;
+    if (action === "join") socialJoinWorld(btn.dataset.sessionId);
+    else if (action === "leave") socialLeaveWorld();
+    else if (action === "dismiss") {
+      if (!socialUI.dismissedInvites) socialUI.dismissedInvites = new Set();
+      socialUI.dismissedInvites.add(btn.dataset.sessionId);
+      renderSocial();
+    }
+  });
+
+  document.getElementById("socialShareActive")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-social-action]");
+    if (btn && btn.dataset.socialAction === "unshare") socialUnshareWorld();
+  });
+
+  document.getElementById("socialHostRelay")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-social-action]");
+    if (!btn) return;
+    const action = btn.dataset.socialAction;
+    if (action === "copy-relay") socialCopyHostRelay(false);
+    else if (action === "copy-invite") socialCopyHostRelay(true);
+    else if (action === "stop-host-relay") socialStopHostRelay();
+  });
+
+  document.getElementById("socialInviteApply")?.addEventListener("click", () => {
+    applySocialInvite(document.getElementById("socialInviteInput")?.value || "");
+  });
+  document.getElementById("socialInviteInput")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      applySocialInvite(e.target.value || "");
+    }
+  });
+  document.getElementById("socialClipboardBanner")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-social-action]");
+    if (!btn) return;
+    if (btn.dataset.socialAction === "apply-clipboard") {
+      applySocialInvite(socialUI.pendingClipboardInvite || "");
+    } else if (btn.dataset.socialAction === "dismiss-clipboard") {
+      socialUI.pendingClipboardInvite = "";
+      renderClipboardBanner("");
+    }
+  });
+  initSocialClipboard();
+}
+
+async function applySocialInvite(raw) {
+  const text = String(raw || "").trim();
+  if (!text) {
+    showToast("Davet kodu boş.", "info");
+    return;
+  }
+  const btn = document.getElementById("socialInviteApply");
+  if (btn) { btn.disabled = true; btn.textContent = "Uygulanıyor…"; }
+  const data = await apiPost("/api/social/invite/apply", { code: text }, 120000);
+  if (btn) { btn.disabled = false; btn.textContent = "Daveti uygula"; }
+  if (!data || data.success === false) {
+    showToast((data && data.error) || "Davet uygulanamadı.", "error");
+    return;
+  }
+  socialUI.data = data;
+  socialUI.pendingClipboardInvite = "";
+  renderClipboardBanner("");
+  const input = document.getElementById("socialInviteInput");
+  if (input) input.value = "";
+  showToast("Davet uygulandı; relay ayarlandı.", "success");
+  renderSocial();
+  await loadSocialState(true);
+}
+
+function renderClipboardBanner(code) {
+  const el = document.getElementById("socialClipboardBanner");
+  if (!el) return;
+  if (!code) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  const short = code.length > 44 ? `${code.slice(0, 44)}…` : code;
+  el.hidden = false;
+  el.innerHTML = `<span><strong>Panoda davet bulundu.</strong> ${socialEsc(short)}</span>
+    <span class="social-clipboard-banner-actions">
+      <button type="button" class="social-mini-btn primary" data-social-action="apply-clipboard">Uygula</button>
+      <button type="button" class="social-mini-btn" data-social-action="dismiss-clipboard">Yoksay</button>
+    </span>`;
+}
+
+async function readClipboardInvite() {
+  let text = "";
+  try {
+    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+      text = await window.__TAURI__.core.invoke("check_clipboard_invite") || "";
+    }
+  } catch (_) {}
+  if (!text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        text = await navigator.clipboard.readText();
+      }
+    } catch (_) {}
+  }
+  return text || "";
+}
+
+function handleExternalInvite(text) {
+  const m = String(text || "").match(/CL1-[A-Za-z0-9_-]+/i);
+  if (!m) return;
+  const code = m[0].replace(/^cl1-/i, "CL1-");
+  if (!code || code === socialUI.lastClipboardInvite) return;
+  socialUI.lastClipboardInvite = code;
+  socialUI.pendingClipboardInvite = code;
+  renderClipboardBanner(code);
+  switchTab("tab-friends");
+}
+
+async function inspectClipboardForInvite() {
+  if (document.hidden) return;
+  const text = await readClipboardInvite();
+  if (!text) return;
+  handleExternalInvite(text);
+}
+
+async function initInviteChannel() {
+  try {
+    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+      const startup = await window.__TAURI__.core.invoke("take_startup_invite");
+      if (startup) handleExternalInvite(startup);
+    }
+    if (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen) {
+      await window.__TAURI__.event.listen("cl-invite", (event) => handleExternalInvite(event.payload));
+      await window.__TAURI__.event.listen("deep-link://new-url", (event) => {
+        const urls = Array.isArray(event.payload) ? event.payload : [event.payload];
+        urls.forEach((url) => handleExternalInvite(url));
+      });
+    }
+  } catch (_) {}
+}
+
+function initSocialClipboard() {
+  window.addEventListener("focus", inspectClipboardForInvite);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) inspectClipboardForInvite();
+  });
+  setTimeout(inspectClipboardForInvite, 900);
+  initInviteChannel();
+}
+
+async function socialCopyHostRelay(withInvite) {
+  const data = socialUI.data || {};
+  const share = data.host_relay && data.host_relay.share;
+  if (!share) {
+    showToast("Host relay henüz hazır değil.", "info");
+    return;
+  }
+  const host = share.host || "bore.pub";
+  const port = share.control_port;
+  const invite = data.invite;
+  if (withInvite && !invite) {
+    showToast("Davet kodu için önce dünyayı paylaş.", "info");
+    return;
+  }
+  const text = withInvite
+    ? `Cookie Launcher daveti:\n${invite.code}\n${invite.web_link}\n\nLauncher → Arkadaşlar → Daveti uygula.`
+    : `${host}:${port}`;
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(withInvite ? "Davet metni kopyalandı." : "Relay adresi kopyalandı.", "success");
+  } catch (_) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+      showToast(withInvite ? "Davet metni kopyalandı." : "Relay adresi kopyalandı.", "success");
+    } catch (err) {
+      showToast(`Relay: ${host}:${port}`, "info");
+    }
+    ta.remove();
+  }
+}
+
+async function socialStopHostRelay() {
+  const ok = await showConfirmDialog({
+    title: "Host relay'i kapat",
+    message: "Ücretsiz relay ve bore tüneli kapanacak. Arkadaşların bağlantısı kesilecek. Emin misin?",
+    okText: "Kapat",
+    danger: true
+  });
+  if (!ok) return;
+  const data = await apiPost("/api/social/relay/stop", {}, 20000);
+  if (!data || data.success === false) {
+    showToast((data && data.error) || "Relay kapatılamadı.", "error");
+    return;
+  }
+  socialUI.data = data;
+  renderSocial();
+  showToast("Host relay kapatıldı.", "info");
+  await loadSocialState(true);
 }

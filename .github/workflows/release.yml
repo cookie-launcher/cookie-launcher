@@ -56,12 +56,12 @@ jobs:
       - name: Build standalone backend core (Python gerekmeden calisir)
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller requests minecraft-launcher-lib urllib3 certifi
+          pip install pyinstaller requests minecraft-launcher-lib urllib3 certifi noiseprotocol
           # --collect-data certifi: kok sertifika demetini (cacert.pem) pakete
           # gomer. macOS/Windows'ta paketlenmis Python sistem CA'larini
           # goremedigi icin bu olmadan Modrinth/Mojang istekleri
           # SSLCertVerificationError ile basarisiz olup listeler bos geliyordu.
-          pyinstaller --onefile --name cookielauncher-core --collect-data certifi --distpath backend --workpath build/pyinstaller --specpath build backend/server.py
+          pyinstaller --onefile --name cookielauncher-core --collect-data certifi --hidden-import noise --collect-submodules noise --distpath backend --workpath build/pyinstaller --specpath build backend/server.py
 
       - name: Build Tauri App (Produces Windows Setup.exe on windows-latest)
         uses: tauri-apps/tauri-action@v0

@@ -10,6 +10,7 @@ Per-Version Isolated Mods, Otomatik Java Runtime ve Canli MB Ilerlemesi
 
 import os
 import sys
+import atexit
 import json
 import re
 import time
@@ -99,8 +100,177 @@ def log_error(msg):
     add_log(line)
 
 
+# ==================== SOSYAL / ARKADAŞLAR ====================
+try:
+    from social_client import SocialClient, SocialError
+    from host_relay import HostRelay
+    import invite_code
+    import rendezvous
+    from config import DEFAULT_RENDEZVOUS_URL
+except Exception as _social_import_error:  # pragma: no cover - paketleme guvenligi
+    SocialClient = None
+    HostRelay = None
+    invite_code = None
+    rendezvous = None
+    DEFAULT_RENDEZVOUS_URL = ""
+
+    class SocialError(RuntimeError):
+        pass
+
+    _SOCIAL_IMPORT_ERROR = _social_import_error
+else:
+    _SOCIAL_IMPORT_ERROR = None
+
+social_client = None
+host_relay = None
+
+
+def start_social_client():
+    """Sosyal istemciyi (relay baglantisi) baslatir. Kritik degil; hata launcher'i durdurmaz."""
+    global social_client
+    if SocialClient is None or social_client is not None:
+        return social_client
+    try:
+        social_client = SocialClient(APP_DATA_DIR)
+        social_client.start()
+        add_log("Sosyal istemci baslatildi.")
+    except Exception as exc:
+        add_log(f"Sosyal istemci baslatilamadi: {exc}")
+        social_client = None
+    return social_client
+
+
+def social_call(action, timeout=30):
+    if social_client is None:
+        raise SocialError("Sosyal servis hazır değil.")
+    return action(social_client)
+
+
+SOCIAL_ERROR_MESSAGES = {
+    "friend_not_found": "Bu kodla bir oyuncu bulunamadı.",
+    "self_request": "Kendinize arkadaşlık isteği gönderemezsiniz.",
+    "already_friends": "Bu oyuncu zaten arkadaş listenizde.",
+    "request_not_found": "Bekleyen bir istek bulunamadı.",
+    "not_friends": "Bu oyuncu arkadaş listenizde değil.",
+    "session_not_found": "Davet artık geçerli değil.",
+    "own_session": "Kendi dünyanıza katılamazsınız.",
+    "host_offline": "Dünyayı paylaşan arkadaş çevrimdışı.",
+    "invalid_port": "Geçersiz port.",
+    "not_ready": "Sosyal servis henüz hazır değil.",
+}
+
+
+def social_error_text(code):
+    raw = str(code or "relay_error")
+    return SOCIAL_ERROR_MESSAGES.get(raw, raw)
+
+
+def social_snapshot():
+    """Sosyal durum + host relay durumu."""
+    if social_client is None:
+        data = {"success": False, "connected": False, "error": "Sosyal servis hazır değil."}
+    else:
+        data = social_client.snapshot()
+    if host_relay is not None:
+        data["host_relay"] = host_relay.status()
+    else:
+        data["host_relay"] = {"running": False, "share": None, "error": "", "log": ""}
+    try:
+        hr = data.get("host_relay") or {}
+        share = hr.get("share") or {}
+        session = data.get("share") or {}
+        if invite_code is not None and share and session and social_client is not None:
+            profile = data.get("profile") or {}
+            expires = int(session.get("expires") or (time.time() + 1800))
+            is_short = bool(share.get("rendezvous_published"))
+            if is_short:
+                try:
+                    code = invite_code.make_short(
+                        str(share.get("room_id") or ""),
+                        invite_code.short_session(str(session.get("session_id") or "")),
+                        expires,
+                        str(profile.get("code") or ""),
+                    )
+                except Exception:
+                    is_short = False
+            if not is_short:
+                code = invite_code.make_long(
+                    room_id=str(share.get("room_id") or ""),
+                    session_id=str(session.get("session_id") or ""),
+                    expires=expires,
+                    endpoint={
+                        "h": share.get("host") or "bore.pub",
+                        "c": int(share.get("control_port") or 0),
+                        "t": int(share.get("tunnel_port") or 0),
+                    },
+                    host_name=str(profile.get("name") or ""),
+                    host_code=str(profile.get("code") or ""),
+                    noise_pub=str(profile.get("noise_public") or ""),
+                    world=str(session.get("world") or ""),
+                )
+            data["invite"] = {
+                "code": code,
+                "deep_link": invite_code.deep_link(code),
+                "web_link": invite_code.web_link(code),
+                "expires": expires,
+                "short": is_short,
+            }
+    except Exception as exc:
+        add_log(f"Davet kodu üretilemedi: {exc}")
+    return data
+
+
+def ensure_host_relay():
+    global host_relay
+    if host_relay is not None:
+        return host_relay
+    if HostRelay is None:
+        raise SocialError("Host relay modülü yüklenemedi.")
+    host_relay = HostRelay(
+        os.path.join(APP_DATA_DIR, "social_relay_host.json"),
+        os.environ.get("SOCIAL_BORE_BIN", ""),
+        os.environ.get("COOKIE_LAUNCHER_RENDEZVOUS_URL", DEFAULT_RENDEZVOUS_URL),
+    )
+    try:
+        atexit.register(host_relay.stop)
+    except Exception:
+        pass
+    return host_relay
+
+
+def wait_social_connected(timeout=15.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        if social_client is not None and social_client.connected:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def start_host_relay_and_connect(timeout=110.0):
+    """Host relay + bore'u başlat, launcher'ı yerel relay'e bağla."""
+    global social_client
+    hr = ensure_host_relay()
+    if social_client is not None:
+        hr.rendezvous_url = getattr(social_client, "rendezvous_url", "") or hr.rendezvous_url
+        hr.noise_public = getattr(social_client, "noise_public", "") or hr.noise_public
+    share = hr.start(timeout=timeout)
+    if social_client is None:
+        start_social_client()
+    if social_client is None:
+        raise SocialError("Sosyal istemci başlatılamadı.")
+    social_client.update_profile(
+        relay_host="127.0.0.1",
+        relay_port=int(share.get("local_control_port") or 0),
+        relay_tls=False,
+    )
+    if not wait_social_connected(18):
+        raise SocialError("Host relay'e bağlanılamadı.")
+    return share
+
+
 # ==================== DIZIN YAPILANDIRMASI ====================
-APP_DATA_DIR = os.path.join(os.path.expanduser("~"), ".cookie_launcher")
+APP_DATA_DIR = os.environ.get("COOKIE_LAUNCHER_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".cookie_launcher")
 os.makedirs(APP_DATA_DIR, exist_ok=True)
 
 DEFAULT_MINECRAFT_DIR = minecraft_launcher_lib.utils.get_minecraft_directory()
@@ -139,7 +309,7 @@ def _download_lock_for(dest_path):
 
 # NOT: Yeni bir API endpoint'i eklendiginde bu surumu ARTIR ve
 # src-tauri/src/main.rs ile src/app.js icindeki kontrolu de guncelle!
-API_VERSION = 15
+API_VERSION = 19
 
 # Loopback API'yi yalnizca launcher'in kendi origin'lerinden gelen isteklere ac.
 # Bu, rastgele bir web sayfasinin /api/instances/delete gibi uclari cagirmasini
@@ -2872,6 +3042,17 @@ def run_net_selftest():
     }
 
 
+def social_set_presence(status, detail=""):
+    """Oyun durumunu arkadaşlara bildirir; relay yoksa sessizce geçer."""
+    global social_client
+    if social_client is None:
+        return
+    try:
+        social_client.call({"type": "presence", "status": status, "detail": detail}, timeout=4)
+    except Exception:
+        pass
+
+
 # ==================== OYUN BASLATMA THREADI (NON-BLOCKING) ====================
 def run_game_background_task(params):
     """
@@ -2903,6 +3084,9 @@ def run_game_background_task(params):
         if params.get("custom_java"):
             add_log("⚠️ HTTP üzerinden gelen custom_java yok sayıldı.")
         jvm_preset = params.get("jvm_preset", "aikar")
+        quick_play_multiplayer = str(params.get("quick_play_multiplayer") or "").strip()
+        if quick_play_multiplayer and not re.fullmatch(r"[A-Za-z0-9.\-\[\]:]+:\d{1,5}", quick_play_multiplayer):
+            raise RuntimeError("Geçersiz sunucu adresi.")
 
         clean_v = clean_minecraft_version(raw_version)
         if not clean_v:
@@ -3089,6 +3273,9 @@ def run_game_background_task(params):
             "launcherName": "CookieLauncher",
             "launcherVersion": "3.1.0",
         }
+        if quick_play_multiplayer:
+            options["quickPlayMultiplayer"] = quick_play_multiplayer
+            add_log(f"Arkadaş dünyasına doğrudan bağlanılacak: {quick_play_multiplayer}")
 
         update_state(
             status="Oyun komutu oluşturuluyor...",
@@ -3158,6 +3345,7 @@ def run_game_background_task(params):
                 else:
                     launch_state["status"] = "Oyun kapandı."
                     launch_state["detail"] = ""
+            social_set_presence("menu", "")
             add_log(f"Minecraft süreci kapandı (Çıkış Kodu: {ret})")
 
         threading.Thread(target=log_streamer, daemon=True).start()
@@ -3541,7 +3729,16 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
 
     def _origin_allowed(self):
         origin = self._origin()
-        return (not origin) or origin in ALLOWED_ORIGINS
+        if not origin or origin in ALLOWED_ORIGINS:
+            return True
+        # Ayni loopback portundan gelen istekler (ornegin 18422) da guvenli.
+        try:
+            parsed = urlparse(origin)
+            if parsed.scheme in ("http", "https") and parsed.hostname in ("127.0.0.1", "localhost", "::1"):
+                return parsed.port == self.server.server_address[1]
+        except Exception:
+            pass
+        return False
 
     def _host_allowed(self):
         """DNS rebinding'e karsi Host basligini gercek loopback portuyla esle."""
@@ -3679,8 +3876,25 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
                     "features": ["instances", "modpack", "instance_mods", "content_manage",
                                  "content_icons", "loader_versions", "net_test",
                                  "profile_detail", "content_toggle", "mod_deps",
-                                 "profile_assets", "gallery_file"],
+                                 "profile_assets", "gallery_file", "social", "social_host_relay",
+                                 "social_cl1", "social_clipboard", "social_binary_handshake",
+                                 "social_short_code", "social_rendezvous", "social_noise"],
                 })
+                return
+
+            # 0a. Sosyal / Arkadaşlar durumu
+            if path in ("/social/state", "/social/state/"):
+                try:
+                    self.send_json(social_snapshot())
+                except Exception as exc:
+                    self.send_json({"success": False, "error": social_error_text(str(exc))}, 503)
+                return
+
+            if path in ("/social/lan", "/social/lan/"):
+                try:
+                    self.send_json(social_call(lambda sc: sc.scan_lan()))
+                except Exception as exc:
+                    self.send_json({"success": False, "error": social_error_text(str(exc))}, 503)
                 return
 
             # 0b. Yukleyici (Loader) Surumleri: onerilen + tum surumler
@@ -4041,6 +4255,142 @@ class CookieLauncherHTTPHandler(http.server.SimpleHTTPRequestHandler):
             body = self.get_post_body()
             if body is None:
                 self.send_json({"success": False, "error": "İstek gövdesi çok büyük."}, 413)
+                return
+
+            # 0z. Sosyal / Arkadaşlar işlemleri
+            if path.startswith("/social/"):
+                try:
+                    if path == "/social/profile":
+                        name = body.get("name")
+                        relay_host = body.get("relay_host")
+                        relay_port = body.get("relay_port")
+                        relay_tls = body.get("tls") if "tls" in body else None
+                        rendezvous_url = body.get("rendezvous_url") if "rendezvous_url" in body else None
+                        result = social_call(lambda sc: sc.update_profile(
+                            name=name if name is not None else None,
+                            relay_host=relay_host if relay_host is not None else None,
+                            relay_port=relay_port if relay_port is not None else None,
+                            relay_tls=relay_tls,
+                            rendezvous_url=rendezvous_url,
+                        ))
+                        self.send_json({"success": True, "profile": result, **social_snapshot()})
+                        return
+                    if path == "/social/friend/add":
+                        code = str(body.get("code") or "").strip()
+                        result = social_call(lambda sc: sc.add_friend(code))
+                        self.send_json({"success": True, "result": result, **social_snapshot()})
+                        return
+                    if path == "/social/friend/respond":
+                        pid = str(body.get("player_id") or "").strip()
+                        accept = _as_bool(body.get("accept"), False)
+                        social_call(lambda sc: sc.respond_friend(pid, accept))
+                        self.send_json({"success": True, **social_snapshot()})
+                        return
+                    if path == "/social/friend/remove":
+                        pid = str(body.get("player_id") or "").strip()
+                        social_call(lambda sc: sc.remove_friend(pid))
+                        self.send_json({"success": True, **social_snapshot()})
+                        return
+                    if path == "/social/invite/apply":
+                        if invite_code is None:
+                            raise SocialError("Davet kodu modülü yüklenemedi.")
+                        raw = str(body.get("code") or "").strip()
+                        inv = invite_code.parse(raw)
+                        if not inv.endpoint:
+                            if rendezvous is None or social_client is None:
+                                raise SocialError("Kısa davet kodu için rendezvous servisi gerekli.")
+                            rdz_url = str(getattr(social_client, "rendezvous_url", "") or os.environ.get("COOKIE_LAUNCHER_RENDEZVOUS_URL", DEFAULT_RENDEZVOUS_URL)).strip()
+                            if not rdz_url:
+                                raise SocialError("Kısa kod için Ayarlar → Rendezvous adresi gerekli.")
+                            resolved = rendezvous.resolve(rdz_url, inv.room_id, timeout=5)
+                            if not resolved:
+                                raise SocialError("Oda bulunamadı veya çevrimdışı (rendezvous).")
+                            inv.endpoint = resolved
+                        if not inv.noise_pub and inv.endpoint:
+                            inv.noise_pub = str(inv.endpoint.get("npub") or "")
+                        if social_client is None:
+                            start_social_client()
+                        if social_client is None:
+                            raise SocialError("Sosyal istemci başlatılamadı.")
+                        host = str(inv.endpoint.get("h") or "").strip()
+                        try:
+                            control_port = int(inv.endpoint.get("c") or 0)
+                        except Exception:
+                            control_port = 0
+                        if not host or not (1 <= control_port <= 65535):
+                            raise SocialError("Davet relay bilgisi geçersiz.")
+                        social_client.update_profile(
+                            relay_host=host,
+                            relay_port=control_port,
+                            relay_tls=False,
+                            noise_peer_pub=inv.noise_pub or None,
+                        )
+                        if not wait_social_connected(18):
+                            raise SocialError("Davet relay'ine bağlanılamadı.")
+                        friend_result = None
+                        if inv.host_code and inv.host_code != (social_client.you or {}).get("code"):
+                            try:
+                                friend_result = social_client.add_friend(inv.host_code)
+                            except Exception as exc:
+                                friend_result = {"ok": False, "error": str(exc)}
+                        self.send_json({
+                            "success": True,
+                            "invite": inv.to_dict(),
+                            "friend": friend_result,
+                            **social_snapshot(),
+                        })
+                        return
+                    if path == "/social/world/share":
+                        world = str(body.get("world") or "Dünya")
+                        try:
+                            port = int(body.get("port") or 0)
+                        except Exception:
+                            port = 0
+                        # Relay yoksa host relay + ücretsiz bore otomatik başlar.
+                        if social_client is None or not social_client.connected:
+                            add_log("Host relay otomatik başlatılıyor (ücretsiz bore tüneli)...")
+                            start_host_relay_and_connect()
+                        result = social_call(lambda sc: sc.share_world(world, port))
+                        self.send_json({"success": True, "result": result, **social_snapshot()})
+                        return
+                    if path == "/social/relay/start":
+                        share = start_host_relay_and_connect()
+                        self.send_json({"success": True, "host_share": share, **social_snapshot()})
+                        return
+                    if path == "/social/relay/stop":
+                        if host_relay is not None:
+                            host_relay.stop()
+                        if social_client is not None:
+                            social_client.reconnect()
+                        self.send_json({"success": True, **social_snapshot()})
+                        return
+                    if path == "/social/world/unshare":
+                        social_call(lambda sc: sc.unshare_world())
+                        self.send_json({"success": True, **social_snapshot()})
+                        return
+                    if path == "/social/world/join":
+                        sid = str(body.get("session_id") or "").strip()
+                        result = social_call(lambda sc: sc.join_world(sid), timeout=40)
+                        self.send_json({"success": True, "result": result, **social_snapshot()})
+                        return
+                    if path == "/social/world/leave":
+                        social_call(lambda sc: sc.leave_world(True))
+                        self.send_json({"success": True, **social_snapshot()})
+                        return
+                    if path == "/social/presence":
+                        status = str(body.get("status") or "menu")
+                        detail = str(body.get("detail") or "")
+                        social_call(lambda sc: sc.call({"type": "presence", "status": status, "detail": detail}, timeout=5))
+                        self.send_json({"success": True, **social_snapshot()})
+                        return
+                    if path == "/social/reconnect":
+                        social_call(lambda sc: sc.reconnect())
+                        self.send_json({"success": True, **social_snapshot()})
+                        return
+                    self.send_json({"success": False, "error": "Bilinmeyen sosyal işlem."}, 404)
+                except Exception as exc:
+                    add_log(f"Sosyal API hatası ({path}): {type(exc).__name__}: {exc}")
+                    self.send_json({"success": False, "error": social_error_text(str(exc))}, 200)
                 return
 
             # 1. Non-Blocking Oyun Baslatma (ANINDA 200 OK doner!)
@@ -4821,6 +5171,7 @@ def ensure_download_tracker():
 def start_server(port=18420):
     reconcile_stale_installs()
     ensure_download_tracker()
+    start_social_client()
     handler = CookieLauncherHTTPHandler
     for p in [port, 18421, 18422, 18423, 18424, 18425]:
         try:
@@ -4835,7 +5186,11 @@ def start_server(port=18420):
 
 
 if __name__ == "__main__":
-    server, port = start_server(18420)
+    try:
+        _start_port = int(os.environ.get("COOKIE_LAUNCHER_PORT", "18420"))
+    except Exception:
+        _start_port = 18420
+    server, port = start_server(_start_port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

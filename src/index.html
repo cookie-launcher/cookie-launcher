@@ -100,6 +100,14 @@
           <span class="nav-label">Konsol</span>
           <span class="nav-key">5</span>
         </button>
+        <button class="nav-tab" data-tab="tab-friends" role="tab" aria-selected="false" title="Arkadaşlar">
+          <span class="nav-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </span>
+          <span class="nav-label">Arkadaşlar</span>
+          <span class="nav-key">6</span>
+          <span class="nav-dot" id="socialNavDot" hidden></span>
+        </button>
       </div>
 
       <div class="rail-bottom">
@@ -419,6 +427,125 @@
         </div>
         <pre class="console-output" id="consoleOutput">CookieLauncher Core Konsolu Hazır...\n</pre>
       </section>
+
+      <!-- =================== SEKME 6: ARKADAŞLAR =================== -->
+      <section class="tab-pane" id="tab-friends">
+        <div class="social-shell">
+          <div class="section-titlebar social-titlebar">
+            <div>
+              <span class="eyebrow">Sosyal</span>
+              <h2 class="title-text">Arkadaşlar</h2>
+              <p class="subtitle-text">Arkadaşlarını ekle, çevrimiçi durumlarını gör ve dünyanı tek tıkla paylaş.</p>
+            </div>
+            <div class="section-actions">
+              <button class="btn-secondary" id="socialRefreshBtn" type="button">Yenile</button>
+              <button class="btn-secondary" id="socialSettingsBtn" type="button">Bağlantı</button>
+            </div>
+          </div>
+
+          <div class="social-banner" id="socialBanner" hidden></div>
+          <div class="social-clipboard-banner" id="socialClipboardBanner" hidden></div>
+
+          <div class="social-grid">
+            <div class="social-col social-col-main">
+              <section class="panel social-add-panel">
+                <div class="panel-head social-panel-head">
+                  <div>
+                    <h3 class="panel-title">Arkadaş ekle</h3>
+                    <span class="panel-sub">Arkadaşının 8 karakterlik koduyla istek gönder.</span>
+                  </div>
+                </div>
+                <div class="social-code-card">
+                  <div>
+                    <span class="eyebrow">Senin arkadaş kodun</span>
+                    <button type="button" class="social-code" id="socialCopyCode" title="Kodu kopyala">————</button>
+                  </div>
+                  <p class="social-hint">Bu kodu arkadaşınla paylaş; seni ekleyebilsin. Kod yalnızca senin hesabına aittir.</p>
+                </div>
+                <div class="social-add-row">
+                  <input type="text" id="socialAddCode" class="styled-input social-code-input" placeholder="Örn. K7F2Q9AB" maxlength="12" autocomplete="off" spellcheck="false">
+                  <button type="button" class="btn-primary-action" id="socialAddBtn">İstek gönder</button>
+                </div>
+                <div class="social-add-row social-invite-apply">
+                  <input type="text" id="socialInviteInput" class="styled-input" placeholder="CL1-... veya davet linki" autocomplete="off" spellcheck="false">
+                  <button type="button" class="btn-secondary" id="socialInviteApply">Daveti uygula</button>
+                </div>
+                <p class="social-hint">Arkadaşın sana CL1 davet kodu/linki gönderdiyse buraya yapıştır; relay ve arkadaş isteği otomatik ayarlanır.</p>
+              </section>
+
+              <section class="panel social-friends-panel">
+                <div class="panel-head social-panel-head">
+                  <div>
+                    <h3 class="panel-title">Arkadaşların <span class="social-count" id="socialFriendCount">0</span></h3>
+                    <span class="panel-sub" id="socialPresenceSummary">Henüz arkadaş yok.</span>
+                  </div>
+                  <span class="social-connection-pill" id="socialConnectionPill" data-state="offline">Bağlanıyor…</span>
+                </div>
+                <div class="social-list" id="socialFriendsList">
+                  <div class="skeleton skeleton-row"></div>
+                  <div class="skeleton skeleton-row"></div>
+                </div>
+              </section>
+
+              <section class="panel social-requests-panel" id="socialRequestsPanel" hidden>
+                <div class="panel-head social-panel-head">
+                  <div>
+                    <h3 class="panel-title">Arkadaşlık istekleri <span class="social-count" id="socialRequestCount">0</span></h3>
+                    <span class="panel-sub">Gelen ve giden istekler.</span>
+                  </div>
+                </div>
+                <div class="social-list" id="socialRequestsList"></div>
+              </section>
+            </div>
+
+            <aside class="social-col social-col-side">
+              <section class="panel social-share-panel">
+                <div class="panel-head social-panel-head">
+                  <div>
+                    <h3 class="panel-title">Dünyanı paylaş</h3>
+                    <span class="panel-sub">Minecraft'ta dünyayı LAN'a aç, sonra buradan paylaş.</span>
+                  </div>
+                </div>
+                <div class="social-host-relay" id="socialHostRelay" hidden></div>
+                <div id="socialShareIdle">
+                  <div class="social-lan-worlds" id="socialLanWorlds"></div>
+                  <div class="social-field">
+                    <label for="socialWorldName">Dünya adı</label>
+                    <input type="text" id="socialWorldName" class="styled-input" placeholder="Örn. Hayatta Kalma" maxlength="64">
+                  </div>
+                  <div class="social-field">
+                    <label for="socialWorldPort">LAN portu</label>
+                    <input type="number" id="socialWorldPort" class="styled-input" value="25565" min="1" max="65535">
+                  </div>
+                  <button type="button" class="btn-primary-action social-wide-btn" id="socialShareBtn">Dünyayı arkadaşlarına aç</button>
+                  <p class="social-hint">Minecraft'ta <strong>Esc → LAN'a aç</strong> dedikten sonra portu buraya girebilirsin. Launcher açık LAN dünyalarını otomatik de bulur.</p>
+                </div>
+                <div id="socialShareActive" hidden></div>
+              </section>
+
+              <section class="panel social-invites-panel">
+                <div class="panel-head social-panel-head">
+                  <div>
+                    <h3 class="panel-title">Davetler</h3>
+                    <span class="panel-sub">Arkadaşlarının açık dünyaları.</span>
+                  </div>
+                </div>
+                <div class="social-list" id="socialInvitesList"></div>
+              </section>
+
+              <section class="panel social-help-panel">
+                <span class="eyebrow">Nasıl çalışır?</span>
+                <ol class="social-steps">
+                  <li>Arkadaş kodunu paylaş, karşılıklı ekleyin.</li>
+                  <li>Minecraft'ta dünyanı LAN'a aç.</li>
+                  <li>Buradan paylaş; arkadaşın daveti görüp katılsın.</li>
+                </ol>
+                <p class="social-hint">Oyun trafiği relay üzerinden akar; dünya senin bilgisayarında kalır.</p>
+              </section>
+            </aside>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -429,7 +556,7 @@
       <span class="status-sep">/</span>
       <span class="mono" id="statusApiText">127.0.0.1:18420</span>
     </div>
-    <div class="status-center mono">Ctrl+1–5 sekmeler · Ctrl+K ara · ? kısayollar</div>
+    <div class="status-center mono">Ctrl+1–6 sekmeler · Ctrl+K ara · ? kısayollar</div>
     <div class="status-right mono">v3.1.0 · Java Edition</div>
   </footer>
 
@@ -685,6 +812,47 @@
   </div>
 
   <!-- =================== MODAL: ONAY / UYARI =================== -->
+  <div class="modal-backdrop" id="socialSettingsModal" style="display: none;">
+    <div class="modal-window social-settings-window" role="dialog" aria-modal="true" aria-labelledby="socialSettingsTitle">
+      <div class="modal-top">
+        <div class="modal-top-title">
+          <h3 id="socialSettingsTitle">Bağlantı ayarları</h3>
+          <p class="social-hint">Arkadaşlar için relay adresi ve görünen ad.</p>
+        </div>
+        <button class="btn-close-modal" id="socialSettingsClose" type="button" title="Kapat" aria-label="Kapat">✕</button>
+      </div>
+      <div class="social-settings-body">
+        <div class="social-field">
+          <label for="socialSettingsName">Görünen ad</label>
+          <input type="text" id="socialSettingsName" class="styled-input" maxlength="32" placeholder="Minecraft kullanıcı adın">
+        </div>
+        <div class="social-field">
+          <label for="socialSettingsHost">Relay adresi</label>
+          <input type="text" id="socialSettingsHost" class="styled-input" placeholder="127.0.0.1" spellcheck="false">
+        </div>
+        <div class="social-field">
+          <label for="socialSettingsPort">Relay portu</label>
+          <input type="number" id="socialSettingsPort" class="styled-input" min="1" max="65535" placeholder="19021">
+        </div>
+        <div class="social-field">
+          <label for="socialSettingsRendezvous">Rendezvous adresi (opsiyonel)</label>
+          <input type="text" id="socialSettingsRendezvous" class="styled-input" placeholder="https://cl1-relay.example.workers.dev" spellcheck="false">
+        </div>
+        <p class="social-hint">Kısa CL1 kodları için Worker adresi. Boşsa uzun kod kullanılır.</p>
+        <label class="social-check" for="socialSettingsTls">
+          <input type="checkbox" id="socialSettingsTls">
+          <span>TLS kullan (sertifikalı relay)</span>
+        </label>
+        <p class="social-hint">İnternete açık relay için TLS önerilir. Yerel testte kapalı bırakabilirsin.</p>
+        <p class="social-hint">VPS yoksa: host bilgisayarda <code>python3 backend/share_relay.py</code> çalıştır; çıkan <code>bore.pub</code> adresini arkadaşlarınla paylaş.</p>
+        <div class="social-settings-actions">
+          <button type="button" class="btn-secondary" id="socialSettingsCancel">Vazgeç</button>
+          <button type="button" class="btn-primary-action" id="socialSettingsSave">Kaydet ve bağlan</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop" id="confirmModal" style="display: none;">
     <div class="modal-window confirm-modal-window" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
       <div class="confirm-modal-inner">
@@ -843,6 +1011,7 @@
         <div class="shortcut-row"><span>Modlar</span><kbd>Ctrl</kbd><kbd>3</kbd></div>
         <div class="shortcut-row"><span>Galeri</span><kbd>Ctrl</kbd><kbd>4</kbd></div>
         <div class="shortcut-row"><span>Konsol</span><kbd>Ctrl</kbd><kbd>5</kbd></div>
+        <div class="shortcut-row"><span>Arkadaşlar</span><kbd>Ctrl</kbd><kbd>6</kbd></div>
         <div class="shortcut-row"><span>İçerik araması</span><kbd>Ctrl</kbd><kbd>K</kbd></div>
         <div class="shortcut-row"><span>Oyunu başlat</span><kbd>Enter</kbd></div>
         <div class="shortcut-row"><span>Kısayollar</span><kbd>?</kbd></div>
