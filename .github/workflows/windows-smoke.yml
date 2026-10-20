@@ -74,6 +74,13 @@ jobs:
             $social = Invoke-RestMethod -Uri "http://127.0.0.1:18420/api/social/state" -TimeoutSec 5
             if ($social.success -eq $false) { throw "Social module unavailable: $($social.error)" }
             Write-Host "Social module OK"
+
+            $relay = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:18420/api/social/relay/start" -ContentType "application/json" -Body "{}" -TimeoutSec 90
+            if (-not $relay.host_relay.share.control_port) {
+              throw "Python bore host relay did not start"
+            }
+            Write-Host "Host relay OK: bore.pub:$($relay.host_relay.share.control_port)"
+            Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:18420/api/social/relay/stop" -ContentType "application/json" -Body "{}" -TimeoutSec 30 | Out-Null
           } finally {
             Stop-Process -Id $core.Id -Force -ErrorAction SilentlyContinue
           }
