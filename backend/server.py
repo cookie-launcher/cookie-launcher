@@ -254,6 +254,7 @@ def wait_social_connected(timeout=15.0):
 def start_host_relay_and_connect(timeout=110.0):
     """Host relay + bore'u başlat, launcher'ı yerel relay'e bağla."""
     global social_client
+    ensure_offline_server_properties()
     hr = ensure_host_relay()
     if social_client is not None:
         hr.rendezvous_url = getattr(social_client, "rendezvous_url", "") or hr.rendezvous_url
@@ -280,6 +281,53 @@ os.makedirs(APP_DATA_DIR, exist_ok=True)
 DEFAULT_MINECRAFT_DIR = minecraft_launcher_lib.utils.get_minecraft_directory()
 minecraft_directory = DEFAULT_MINECRAFT_DIR
 os.makedirs(minecraft_directory, exist_ok=True)
+
+
+
+def _write_offline_properties(path):
+    """server.properties içinde online-mode=false bırak; diğer ayarları koru."""
+    try:
+        lines = []
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.read().splitlines()
+        kept = [ln for ln in lines if not ln.strip().lower().startswith("online-mode")]
+        kept.append("online-mode=false")
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(kept) + "\n")
+        os.replace(tmp, path)
+        return True
+    except Exception as exc:
+        add_log(f"server.properties güncellenemedi ({path}): {exc}")
+        return False
+
+
+def ensure_offline_server_properties():
+    """Launcher offline hesapla çalıştığı için LAN dünyalarını online-mode=false yap.
+
+    Minecraft'ta server.properties yoksa varsayılan online-mode=true olur ve
+    offline istemciler Encryption Request aşamasında düşer. Bu yüzden hem ana
+    .minecraft klasörüne hem de instances/* oyun klasörlerine yazılır.
+    """
+    targets = [os.path.join(minecraft_directory, "server.properties")]
+    try:
+        if os.path.isdir(INSTANCES_DIR):
+            for name in os.listdir(INSTANCES_DIR):
+                inst_dir = os.path.join(INSTANCES_DIR, name)
+                if os.path.isdir(inst_dir):
+                    targets.append(os.path.join(inst_dir, "server.properties"))
+    except Exception:
+        pass
+    changed = 0
+    for target in targets:
+        if _write_offline_properties(target):
+            changed += 1
+    if changed:
+        add_log("Minecraft LAN için online-mode=false ayarlandı.")
+    return changed
+
 
 INSTANCES_DIR = os.path.join(minecraft_directory, "instances")
 os.makedirs(INSTANCES_DIR, exist_ok=True)
@@ -5178,6 +5226,7 @@ def ensure_download_tracker():
 def start_server(port=18420):
     reconcile_stale_installs()
     ensure_download_tracker()
+    ensure_offline_server_properties()
     start_social_client()
     handler = CookieLauncherHTTPHandler
     for p in [port, 18421, 18422, 18423, 18424, 18425]:
