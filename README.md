@@ -1,4 +1,4 @@
-# Cookie Launcher 🍪 (Tauri v2 · v3.1.0)
+# Cookie Launcher 🍪 (Tauri v2 · v4.0.0)
 
 Açık kaynak, hafif ve modern bir **Minecraft: Java Edition** başlatıcısı — Tauri (Rust) kabuk + Python çekirdek.
 

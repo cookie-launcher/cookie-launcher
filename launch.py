@@ -79,7 +79,7 @@ def open_app_window(url):
 
 def main():
     print("=" * 60)
-    print("🍪 COOKIELAUNCHER v3.1.0")
+    print("🍪 COOKIELAUNCHER v4.0.0")
     print("=" * 60)
     backend_proc = None
     try:
