@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 420" shape-rendering="crispEdges">
+  <defs>
+    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#e6a052" stop-opacity=".35"/>
+      <stop offset=".6" stop-color="#e6a052" stop-opacity=".1"/>
+      <stop offset="1" stop-color="#e6a052" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="top" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8b06b"/>
+      <stop offset="1" stop-color="#d3924e"/>
+    </linearGradient>
+    <linearGradient id="left" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b7763f"/>
+      <stop offset="1" stop-color="#9a5d2f"/>
+    </linearGradient>
+    <linearGradient id="right" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8a5129"/>
+      <stop offset="1" stop-color="#6d3c1d"/>
+    </linearGradient>
+    <clipPath id="topClip">
+      <path d="M210 80 350 150 210 220 70 150Z"/>
+    </clipPath>
+    <clipPath id="leftClip">
+      <path d="M70 150 210 220 210 380 70 310Z"/>
+    </clipPath>
+    <clipPath id="rightClip">
+      <path d="M350 150 210 220 210 380 350 310Z"/>
+    </clipPath>
+  </defs>
+
+  <circle cx="210" cy="236" r="200" fill="url(#halo)"/>
+  <path d="M210 392 350 322 210 382 70 312Z" fill="#0b0705" opacity=".45"/>
+
+  <!-- cube body -->
+  <path d="M70 150 210 220 210 380 70 310Z" fill="url(#left)"/>
+  <path d="M350 150 210 220 210 380 350 310Z" fill="url(#right)"/>
+  <path d="M210 80 350 150 210 220 70 150Z" fill="url(#top)"/>
+
+  <!-- top chocolate chips -->
+  <g fill="#3a2114" clip-path="url(#topClip)">
+    <path d="M146 118 160 125 146 132 132 125Z"/>
+    <path d="M210 138 226 146 210 154 194 146Z"/>
+    <path d="M270 118 284 125 270 132 256 125Z"/>
+    <path d="M116 152 130 159 116 166 102 159Z"/>
+    <path d="M178 168 194 176 178 184 162 176Z"/>
+    <path d="M242 164 256 171 242 178 228 171Z"/>
+    <path d="M304 148 318 155 304 162 290 155Z"/>
+    <path d="M148 196 160 202 148 208 136 202Z"/>
+    <path d="M212 206 228 214 212 222 196 214Z"/>
+    <path d="M274 194 286 200 274 206 262 200Z"/>
+  </g>
+
+  <!-- chip edges on the sides -->
+  <g fill="#2a170d" clip-path="url(#leftClip)">
+    <path d="M104 196 120 204 120 216 104 208Z"/>
+    <path d="M160 232 176 240 176 252 160 244Z"/>
+    <path d="M114 270 130 278 130 290 114 282Z"/>
+    <path d="M168 306 184 314 184 326 168 318Z"/>
+  </g>
+  <g fill="#2a170d" clip-path="url(#rightClip)">
+    <path d="M240 210 256 202 256 214 240 222Z"/>
+    <path d="M288 236 304 228 304 240 288 248Z"/>
+    <path d="M246 282 262 274 262 286 246 294Z"/>
+    <path d="M294 306 310 298 310 310 294 318Z"/>
+  </g>
+
+  <!-- pixel texture -->
+  <g clip-path="url(#leftClip)" opacity=".18">
+    <rect x="70" y="184" width="140" height="4" fill="#4f2c14"/>
+    <rect x="70" y="236" width="140" height="4" fill="#4f2c14"/>
+    <rect x="70" y="288" width="140" height="4" fill="#4f2c14"/>
+    <rect x="120" y="150" width="4" height="230" fill="#4f2c14"/>
+  </g>
+  <g clip-path="url(#rightClip)" opacity=".14">
+    <rect x="210" y="204" width="140" height="4" fill="#3a1e0d"/>
+    <rect x="210" y="258" width="140" height="4" fill="#3a1e0d"/>
+    <rect x="284" y="150" width="4" height="230" fill="#3a1e0d"/>
+  </g>
+
+  <!-- rim light -->
+  <path d="M70 150 210 80 350 150" fill="none" stroke="#ffd79b" stroke-width="3" opacity=".5"/>
+  <path d="M70 150 70 310" fill="none" stroke="#c8874a" stroke-width="2" opacity=".35"/>
+  <path d="M350 150 350 310" fill="none" stroke="#5a2f15" stroke-width="2" opacity=".5"/>
+
+  <!-- floating crumbs -->
+  <g opacity=".9">
+    <path d="M58 92 94 110 58 128 22 110Z" fill="#d3924e"/>
+    <path d="M22 110 58 128 58 160 22 142Z" fill="#9a5d2f"/>
+    <path d="M94 110 58 128 58 160 94 142Z" fill="#6d3c1d"/>
+  </g>
+  <g opacity=".7">
+    <path d="M356 62 382 75 356 88 330 75Z" fill="#d3924e"/>
+    <path d="M330 75 356 88 356 110 330 97Z" fill="#9a5d2f"/>
+    <path d="M382 75 356 88 356 110 382 97Z" fill="#6d3c1d"/>
+  </g>
+  <g opacity=".55">
+    <path d="M350 330 370 340 350 350 330 340Z" fill="#d3924e"/>
+    <path d="M330 340 350 350 350 368 330 358Z" fill="#9a5d2f"/>
+    <path d="M370 340 350 350 350 368 370 358Z" fill="#6d3c1d"/>
+  </g>
+</svg>

@@ -1185,7 +1185,7 @@ function renderInstances() {
     if (isActive) {
       const badge = document.createElement("span");
       badge.className = "inst-badge-active";
-      badge.textContent = "AKTİF";
+      badge.textContent = "Aktif";
       top.appendChild(badge);
     }
 
@@ -1306,7 +1306,11 @@ function renderPlayHero() {
   const railMeta = document.getElementById("railProfileMeta");
 
   if (!inst) {
-    if (nameEl) nameEl.textContent = "Profil seçilmedi";
+    if (nameEl) {
+      nameEl.textContent = "Profil seçilmedi";
+      nameEl.classList.remove("is-long");
+      nameEl.removeAttribute("title");
+    }
     if (chipsEl) chipsEl.innerHTML = "";
     if (subEl) subEl.textContent = "Başlamak için yeni bir profil oluşturun.";
     if (iconEl) { iconEl.textContent = "?"; }
@@ -1321,8 +1325,12 @@ function renderPlayHero() {
   const loaderLabel = pdsLoaderLabel(inst.loader);
   const loaderText = loaderLabel + (inst.loader_version ? ` ${inst.loader_version}` : "");
 
-  if (nameEl) nameEl.textContent = inst.name || "Profil";
-  if (subEl) subEl.textContent = `"${inst.name || "Profil"}" profili ile oyuna hazırsın.`;
+  if (nameEl) {
+    nameEl.textContent = inst.name || "Profil";
+    nameEl.classList.toggle("is-long", (inst.name || "").length > 18);
+    nameEl.title = inst.name || "";
+  }
+  if (subEl) subEl.textContent = "Başlatmaya hazır.";
   if (detailsBtn) detailsBtn.disabled = false;
 
   if (chipsEl) {
@@ -1435,7 +1443,7 @@ async function loadRecentWorlds() {
     info.className = "recent-info";
     info.innerHTML = `
       <div class="recent-name">${escapeHtml(world.name)}</div>
-      <div class="recent-meta">${escapeHtml(world.last_played || "—")} • ${Number(world.size_mb) || 0} MB</div>
+      <div class="recent-meta">${escapeHtml(world.last_played || "—")}<span class="recent-meta-sep">/</span>${Number(world.size_mb) || 0} MB</div>
     `;
 
     const actions = document.createElement("div");
@@ -2376,13 +2384,17 @@ function setLaunchButton(mode) {
   const btnText = document.getElementById("btnLaunchText");
   if (btnText) {
     const labels = {
-      idle: "OYUNU BAŞLAT",
-      busy: "BAŞLATILIYOR...",
-      installing: "YÜKLENİYOR...",
-      running: " OYUN ÇALIŞIYOR",
-      noProfile: "ÖNCE PROFİL OLUŞTUR"
+      idle: "Oyna",
+      busy: "Başlatılıyor…",
+      installing: "Hazırlanıyor…",
+      running: "Çalışıyor",
+      noProfile: "Profil oluştur"
     };
     btnText.textContent = labels[mode] || labels.idle;
+    const icon = btnLaunch ? btnLaunch.querySelector(".btn-icon") : null;
+    if (icon) {
+      icon.textContent = mode === "running" ? "■" : mode === "installing" ? "↓" : "▶";
+    }
   }
   // noProfile modunda buton tiklanabilir kalir: tiklayinca profil olusturma acilir
   if (btnLaunch) {
@@ -3459,6 +3471,10 @@ function setupTauriWindowControls() {
       if (btnMin) btnMin.addEventListener("click", () => appWin.minimize());
       if (btnMax) btnMax.addEventListener("click", () => appWin.toggleMaximize());
       if (btnClose) btnClose.addEventListener("click", () => appWin.close());
+      const dragRegion = document.querySelector(".titlebar-drag");
+      if (dragRegion) {
+        dragRegion.addEventListener("dblclick", () => appWin.toggleMaximize());
+      }
       return;
     } catch (_) {}
   }
@@ -3676,7 +3692,11 @@ function pdsRenderHeader() {
   const nameEl = document.getElementById("pdsHeadName");
   const metaEl = document.getElementById("pdsHeadMeta");
 
-  if (nameEl) nameEl.textContent = inst.name || "Profil";
+  if (nameEl) {
+    nameEl.textContent = inst.name || "Profil";
+    nameEl.classList.toggle("is-long", (inst.name || "").length > 18);
+    nameEl.title = inst.name || "";
+  }
   if (metaEl) {
     const loaderText = pdsLoaderLabel(inst.loader) + (inst.loader_version ? ` ${inst.loader_version}` : "");
     metaEl.textContent = `MC ${inst.version || "?"} • ${loaderText} • ${inst.mod_count || 0} mod`;

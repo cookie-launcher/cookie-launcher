@@ -6,7 +6,7 @@ Açık kaynak, hafif ve modern bir **Minecraft: Java Edition** başlatıcısı �
 
 ## ✨ Özellikler
 
-- **🎨 Özgün Tasarım Sistemi:** Kalıcı sol rail navigasyonu, cam (glassmorphism) yüzeyler, amber/karanlık tema, akıcı mikro animasyonlar ve AA kontrast.
+- **🎨 Özgün Tasarım Sistemi:** Kalıcı sol rail, koyu çikolata yüzeyler, krem tipografi, karamel başlatma aksiyonu, voksel cookie maskotu ve piksel wordmark; net durum hiyerarşisi, klavye erişilebilirliği ve AA kontrast.
 - **⚡ Hafif Mimarî (ölçüm iddiası yok):** Electron/Chromium paketi yoktur; arayüz işletim sisteminin kendi webview'inde (Tauri/Rust) çalışır, indirme ve başlatma işleri hafif bir Python çekirdeğine aittir. Reklam ve telemetri içermez.
 - **🌐 Dahili Modrinth Mağazası:**
   - Canlı arama, kategori filtreleri (Modlar, Shaderlar, Doku Paketleri, Modpackler).
@@ -108,16 +108,17 @@ Launcher'da **Arkadaşlar → Bağlantı** ekranından relay adresini girin. İn
 
 ---
 
-## 🆕 v3.1 Öne Çıkanlar
+## 🎨 Arayüz ve Deneyim
 
-- **"Cocoa Workshop" arayüzü:** cam efektleri ve emoji ağırlıklı görünüm yerine
-  koyu çikolata zemin, krem tipografi, amber vurgu ve ince çizgili bir masaüstü dili.
-- **Tam yeniden düzenlenen Oyna ekranı:** aktif profil, son dünyalar, hızlı klasör
-  eylemleri ve sistem durumu tek bakışta.
+- **"Cocoa Craft" arayüzü:** koyu çikolata zemin, krem tipografi, karamel vurgu;
+  piksel wordmark, voksel cookie maskotu ve hafif eğimli (bevel) düğmeler.
+  Cam efekti, mor-mavi gradyan ve yeşil başlatma düğmesi yok.
+- **Tam genişlik Oyna ekranı:** profil, sürüm ve tek "Oyna" aksiyonu sinematik
+  hero içinde; alt satırda son dünyalar, hızlı klasör eylemleri ve oyun ayarları.
 - **Profil arama / sıralama:** ada, mod sayısına veya son oynanma zamanına göre filtrele.
 - **Gerçek galeri:** ekran görüntüleri küçük resim olarak yüklenir; tıklayınca büyütülür.
 - **Konsol araçları:** panoya kopyala, `.log` olarak dışa aktar, otomatik kaydırmayı kapat.
-- **Klavye kısayolları:** `Ctrl+1–5` sekmeler, `Ctrl+K` arama, `Enter` başlat, `?` yardım.
+- **Klavye kısayolları:** `Ctrl+1–6` sekmeler, `Ctrl+K` arama, `Enter` başlat, `?` yardım.
 - **Güvenlik ve dayanıklılık:** loopback API için origin/Host doğrulaması, gövde boyutu
   sınırı, güvenli dosya adı/symlink kontrolleri, atomik profil yazımı ve yarım kalan
   kurulumların açılışta kurtarılması.

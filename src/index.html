@@ -5,13 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CookieLauncher</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="redesign.css">
 </head>
 <body>
   <!-- =================== BAŞLIK ÇUBUĞU (TITLEBAR) =================== -->
   <header class="titlebar">
     <div class="titlebar-left">
-      <span class="titlebar-name">COOKIE<span class="titlebar-slash">/</span>LAUNCHER</span>
-      <span class="titlebar-tag">JAVA EDITION</span>
+      <span class="titlebar-name">Cookie<span class="titlebar-slash">/</span>Launcher</span>
+      <span class="titlebar-tag">Java Edition</span>
       <div class="quick-dropdown">
         <button class="btn-titlebar-action" id="btnQuickFolders" aria-haspopup="true" aria-expanded="false">
           <span>Klasörler</span>
@@ -132,12 +133,16 @@
       <!-- =================== SEKME 1: OYNA =================== -->
       <section class="tab-pane active" id="tab-play">
         <div class="play-layout">
-          <div class="play-main">
-            <div class="panel hero-panel" id="heroPanel">
+          <article class="panel hero-panel" id="heroPanel">
+            <div class="hero-art" aria-hidden="true">
+              <img src="assets/cookie-block.svg" alt="">
+            </div>
+            <div class="hero-content">
               <div class="hero-topline">
-                <span class="eyebrow">Aktif profil</span>
+                <span class="hero-kicker">Aktif profil</span>
                 <span class="hero-status" id="heroStatusBadge">Hazır</span>
               </div>
+
               <div class="hero-profile">
                 <div class="hero-avatar" id="heroProfileIcon" aria-hidden="true">?</div>
                 <div class="hero-info">
@@ -147,128 +152,127 @@
                 </div>
               </div>
 
-              <div class="hero-actions">
-                <button type="button" class="btn btn-secondary" id="heroDetailsBtn" disabled>Detaylar</button>
-                <button type="button" class="btn btn-ghost" id="heroManageBtn">Profilleri yönet</button>
+              <div class="hero-foot">
+                <div class="hero-switch">
+                  <label for="activeInstanceSelect">Profil değiştir</label>
+                  <div class="input-with-icon">
+                    <span class="input-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    </span>
+                    <select id="activeInstanceSelect" class="styled-select styled-select-lg"></select>
+                  </div>
+                </div>
+
+                <div class="hero-actions">
+                  <button type="button" class="btn btn-secondary" id="heroDetailsBtn" disabled>Detaylar</button>
+                  <button type="button" class="btn btn-ghost" id="heroManageBtn">Profilleri yönet</button>
+                </div>
+
+                <button class="btn-mega-launch" id="btnLaunchGame" data-mode="idle">
+                  <span class="btn-icon" aria-hidden="true">▶</span>
+                  <span class="btn-text" id="btnLaunchText">Oyna</span>
+                  <span class="btn-key">ENTER</span>
+                </button>
+              </div>
+            </div>
+          </article>
+
+          <div class="play-bottom">
+            <div class="play-bottom-left">
+              <section class="panel recent-panel">
+                <div class="panel-head recent-head">
+                  <div>
+                    <h3 class="panel-title">Son dünyalar</h3>
+                    <span class="panel-sub" id="recentWorldsSub">Aktif profilden</span>
+                  </div>
+                  <button class="btn-quiet" id="btnRefreshWorlds" type="button">Yenile</button>
+                </div>
+                <div class="recent-list" id="recentWorldsList">
+                  <div class="skeleton skeleton-row"></div>
+                  <div class="skeleton skeleton-row"></div>
+                </div>
+              </section>
+
+              <div class="quick-actions">
+                <button class="quick-action" id="btnOpenModsFolder" type="button" title="Mods klasörünü aç">
+                  <span class="quick-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+                  </span>
+                  <span class="quick-text"><strong>Modlar</strong><small>mods klasörünü aç</small></span>
+                </button>
+                <button class="quick-action" id="btnOpenInstanceFolder" type="button" title="Profil klasörünü aç">
+                  <span class="quick-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+                  </span>
+                  <span class="quick-text"><strong>Profil</strong><small>profil klasörünü aç</small></span>
+                </button>
+                <button class="quick-action" id="btnOpenInstanceScreenshots" type="button" title="Profilin ekran görüntülerini aç">
+                  <span class="quick-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="m21 15-4.5-4.5L9 18"/></svg>
+                  </span>
+                  <span class="quick-text"><strong>Görüntüler</strong><small>ekran görüntüleri</small></span>
+                </button>
+              </div>
+            </div>
+
+            <section class="panel play-settings">
+              <div class="panel-head">
+                <h3 class="panel-title">Oyun ayarları</h3>
+                <span class="panel-sub">Tüm profillerde geçerli</span>
               </div>
 
-              <div class="hero-switch">
-                <label for="activeInstanceSelect">Profil değiştir</label>
+              <div class="form-group">
+                <div class="label-row">
+                  <label for="usernameInput">Oyuncu adı</label>
+                  <span class="label-badge">Çevrimdışı</span>
+                </div>
                 <div class="input-with-icon">
                   <span class="input-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
                   </span>
-                  <select id="activeInstanceSelect" class="styled-select styled-select-lg"></select>
+                  <input type="text" id="usernameInput" class="styled-input" placeholder="Oyuncu adınızı yazın..." value="Steve" autocomplete="off" spellcheck="false">
                 </div>
               </div>
-            </div>
 
-            <button class="btn-mega-launch" id="btnLaunchGame" data-mode="idle">
-              <span class="btn-glow-pulse"></span>
-              <span class="btn-icon" aria-hidden="true">▶</span>
-              <span class="btn-text" id="btnLaunchText">OYUNU BAŞLAT</span>
-              <span class="btn-key">ENTER</span>
-            </button>
-
-            <section class="panel recent-panel">
-              <div class="panel-head recent-head">
-                <div>
-                  <h3 class="panel-title">Son dünyalar</h3>
-                  <span class="panel-sub" id="recentWorldsSub">Aktif profilden</span>
+              <div class="optimize-banner-row">
+                <div class="opt-banner-left">
+                  <span class="opt-lightning" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12z"/></svg>
+                  </span>
+                  <div class="opt-banner-text">
+                    <span class="opt-banner-title">Optimize motoru</span>
+                    <span class="opt-banner-desc">Sodium, Lithium ve FerriteCore otomatik kurulur.</span>
+                  </div>
                 </div>
-                <button class="btn-quiet" id="btnRefreshWorlds" type="button">Yenile</button>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="cookieOptimizeToggle" checked aria-label="Optimize motorunu aç/kapat">
+                  <span class="toggle-slider"></span>
+                </label>
               </div>
-              <div class="recent-list" id="recentWorldsList">
-                <div class="skeleton skeleton-row"></div>
-                <div class="skeleton skeleton-row"></div>
+
+              <div class="form-group ram-group">
+                <div class="label-row">
+                  <label for="ramSlider">Ayrılan bellek</label>
+                  <span class="ram-display-badge" id="ramValueText">4 GB</span>
+                </div>
+                <input type="range" id="ramSlider" class="styled-range" min="2" max="16" step="1" value="4">
+                <div class="ram-meter" aria-hidden="true"><div class="ram-meter-fill" id="ramBarFill"></div></div>
+                <div class="range-marks">
+                  <span>2 GB</span>
+                  <span>4 GB</span>
+                  <span>8 GB</span>
+                  <span>16 GB</span>
+                </div>
+                <p class="ram-summary" id="ramSummary">Oyun için ayrılan bellek miktarı.</p>
+              </div>
+
+              <div class="settings-meta">
+                <span class="settings-meta-item"><span class="status-indicator" aria-hidden="true"></span><span id="settingsCoreText">Hazır</span></span>
+                <span class="settings-meta-item mono" id="settingsApiText">127.0.0.1:18420</span>
+                <span class="settings-meta-item mono">v3.1.0</span>
               </div>
             </section>
-
-            <div class="quick-actions">
-              <button class="quick-action" id="btnOpenModsFolder" type="button">
-                <span class="quick-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
-                </span>
-                <span class="quick-text"><strong>Mod klasörü</strong><small>Profilin mods dizini</small></span>
-              </button>
-              <button class="quick-action" id="btnOpenInstanceFolder" type="button">
-                <span class="quick-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-                </span>
-                <span class="quick-text"><strong>Profil klasörü</strong><small>instance dizinini aç</small></span>
-              </button>
-              <button class="quick-action" id="btnOpenInstanceScreenshots" type="button">
-                <span class="quick-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="m21 15-4.5-4.5L9 18"/></svg>
-                </span>
-                <span class="quick-text"><strong>Ekran görüntüleri</strong><small>Profilin görüntüleri</small></span>
-              </button>
-            </div>
           </div>
-
-          <aside class="panel play-settings">
-            <div class="panel-head">
-              <h3 class="panel-title">Oyun ayarları</h3>
-              <span class="panel-sub">Tüm profillerde geçerli</span>
-            </div>
-
-            <div class="form-group">
-              <div class="label-row">
-                <label for="usernameInput">Oyuncu adı</label>
-                <span class="label-badge">Çevrimdışı</span>
-              </div>
-              <div class="input-with-icon">
-                <span class="input-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
-                </span>
-                <input type="text" id="usernameInput" class="styled-input" placeholder="Oyuncu adınızı yazın..." value="Steve" autocomplete="off" spellcheck="false">
-              </div>
-            </div>
-
-            <div class="optimize-banner-row">
-              <div class="opt-banner-left">
-                <span class="opt-lightning" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12z"/></svg>
-                </span>
-                <div class="opt-banner-text">
-                  <span class="opt-banner-title">Optimize motoru</span>
-                  <span class="opt-banner-desc">Sodium, Lithium, FerriteCore ve Indium otomatik kurulur; RAM ve GC ayarlanır.</span>
-                </div>
-              </div>
-              <label class="toggle-switch">
-                <input type="checkbox" id="cookieOptimizeToggle" checked aria-label="Optimize motorunu aç/kapat">
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-
-            <div class="form-group ram-group">
-              <div class="label-row">
-                <label for="ramSlider">Ayrılan bellek</label>
-                <span class="ram-display-badge" id="ramValueText">4 GB</span>
-              </div>
-              <input type="range" id="ramSlider" class="styled-range" min="2" max="16" step="1" value="4">
-              <div class="ram-meter" aria-hidden="true"><div class="ram-meter-fill" id="ramBarFill"></div></div>
-              <div class="range-marks">
-                <span>2 GB</span>
-                <span>4 GB</span>
-                <span>8 GB</span>
-                <span>16 GB</span>
-              </div>
-              <p class="ram-summary" id="ramSummary">Oyun için ayrılan bellek miktarı.</p>
-            </div>
-
-            <div class="settings-block">
-              <span class="settings-label">Sistem</span>
-              <div class="stat-row"><span>Core</span><strong id="settingsCoreText">Hazır</strong></div>
-              <div class="stat-row"><span>API</span><strong id="settingsApiText">127.0.0.1:18420</strong></div>
-              <div class="stat-row"><span>Sürüm</span><strong>3.1.0</strong></div>
-            </div>
-
-            <div class="settings-hint">
-              <span class="settings-label">İpucu</span>
-              <p>Bir profili açtıktan sonra <kbd>Enter</kbd> ile doğrudan başlatabilirsiniz.</p>
-            </div>
-          </aside>
         </div>
       </section>
 

@@ -19,6 +19,8 @@
         "resizable": true,
         "decorations": false,
         "transparent": false,
+        "backgroundColor": "#120d0a",
+        "dragDropEnabled": false,
         "center": true
       }
     ],
