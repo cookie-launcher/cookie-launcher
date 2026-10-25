@@ -6,7 +6,7 @@ Açık kaynak, hafif ve modern bir **Minecraft: Java Edition** başlatıcısı �
 
 ## ✨ Özellikler
 
-- **🎨 Özgün Tasarım Sistemi:** Kalıcı sol rail, koyu çikolata yüzeyler, krem tipografi, karamel başlatma aksiyonu, voksel cookie maskotu ve piksel wordmark; net durum hiyerarşisi, klavye erişilebilirliği ve AA kontrast.
+- **🎨 Özgün Tasarım Sistemi:** Kalıcı sol rail, koyu çikolata yüzeyler, krem tipografi, karamel başlatma aksiyonu, voksel cookie maskotu ve piksel wordmark; klavye kısayolları, görünür focus ve opak yüzeylerde AA kontrast.
 - **⚡ Hafif Mimarî (ölçüm iddiası yok):** Electron/Chromium paketi yoktur; arayüz işletim sisteminin kendi webview'inde (Tauri/Rust) çalışır, indirme ve başlatma işleri hafif bir Python çekirdeğine aittir. Reklam ve telemetri içermez.
 - **🌐 Dahili Modrinth Mağazası:**
   - Canlı arama, kategori filtreleri (Modlar, Shaderlar, Doku Paketleri, Modpackler).
@@ -111,7 +111,7 @@ Launcher'da **Arkadaşlar → Bağlantı** ekranından relay adresini girin. İn
 ## 🎨 Arayüz ve Deneyim
 
 - **"Cocoa Craft" arayüzü:** koyu çikolata zemin, krem tipografi, karamel vurgu;
-  piksel wordmark, voksel cookie maskotu ve hafif eğimli (bevel) düğmeler.
+  piksel wordmark, voksel cookie maskotu ve bevel ana aksiyonlar.
   Cam efekti, mor-mavi gradyan ve yeşil başlatma düğmesi yok.
 - **Tam genişlik Oyna ekranı:** profil, sürüm ve tek "Oyna" aksiyonu sinematik
   hero içinde; alt satırda son dünyalar, hızlı klasör eylemleri ve oyun ayarları.

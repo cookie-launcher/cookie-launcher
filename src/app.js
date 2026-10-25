@@ -1443,7 +1443,7 @@ async function loadRecentWorlds() {
     info.className = "recent-info";
     info.innerHTML = `
       <div class="recent-name">${escapeHtml(world.name)}</div>
-      <div class="recent-meta">${escapeHtml(world.last_played || "—")}<span class="recent-meta-sep">/</span>${Number(world.size_mb) || 0} MB</div>
+      <div class="recent-meta"><span>${escapeHtml(world.last_played || "—")}</span><span>${Number(world.size_mb) || 0} MB</span></div>
     `;
 
     const actions = document.createElement("div");

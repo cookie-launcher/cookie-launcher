@@ -186,7 +186,7 @@ kbd {
   font-family: var(--mono);
   font-size: 8px;
   letter-spacing: 0.12em;
-  color: var(--text-4);
+  color: var(--text-3);
   border: 1px solid var(--line);
   padding: 2px 5px;
   border-radius: 3px;
@@ -346,13 +346,6 @@ kbd {
   white-space: nowrap;
 }
 
-.rail-version {
-  font-family: var(--mono);
-  font-size: 9px;
-  color: var(--text-4);
-  letter-spacing: 0.08em;
-}
-
 .rail-menu {
   display: flex;
   flex-direction: column;
@@ -422,7 +415,7 @@ kbd {
 .nav-key {
   font-family: var(--mono);
   font-size: 9px;
-  color: var(--text-4);
+  color: var(--text-3);
   opacity: 0;
 }
 
@@ -555,7 +548,7 @@ kbd {
   padding: 3px 2px 0;
   border: 0;
   background: transparent;
-  color: var(--text-4);
+  color: var(--text-3);
   font-family: var(--mono);
   font-size: 9px;
 }
@@ -576,7 +569,7 @@ kbd {
   padding: 0 16px;
   background: #0b0907;
   border-top: 1px solid var(--line);
-  color: var(--text-4);
+  color: var(--text-3);
   font-family: var(--mono);
   font-size: 9px;
 }
@@ -590,8 +583,7 @@ kbd {
 }
 
 .status-center {
-  color: var(--text-4);
-  opacity: 0.8;
+  color: var(--text-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -617,8 +609,7 @@ kbd {
 }
 
 .status-sep {
-  color: var(--text-4);
-  opacity: 0.5;
+  color: var(--text-3);
 }
 
 /* ============================== MAIN / PANES ============================== */
@@ -753,7 +744,7 @@ kbd {
 
 .btn-secondary:hover,
 .btn:hover {
-  border-color: var(--text-4);
+  border-color: var(--text-3);
   background: var(--bg-2);
   color: var(--text);
 }
@@ -880,7 +871,7 @@ kbd {
 }
 
 .styled-input::placeholder {
-  color: var(--text-4);
+  color: var(--text-3);
 }
 
 .styled-input:focus,
@@ -1055,7 +1046,7 @@ kbd {
   justify-content: space-between;
   font-family: var(--mono);
   font-size: 8px;
-  color: var(--text-4);
+  color: var(--text-3);
 }
 
 .ram-summary {
@@ -1530,7 +1521,7 @@ kbd {
 
 .recent-action:hover {
   color: var(--text);
-  border-color: var(--text-4);
+  border-color: var(--text-3);
 }
 
 .recent-empty {
@@ -1835,7 +1826,7 @@ kbd {
 }
 
 .btn-inst:hover {
-  border-color: var(--text-4);
+  border-color: var(--text-3);
   color: var(--text);
 }
 
@@ -2185,7 +2176,7 @@ kbd {
 .installed-cat-tab span {
   font-family: var(--mono);
   font-size: 8px;
-  color: var(--text-4);
+  color: var(--text-3);
   margin-left: 2px;
 }
 
@@ -2279,7 +2270,7 @@ kbd {
   height: 24px;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--text-4);
+  color: var(--text-3);
   font-size: 11px;
 }
 
@@ -2290,7 +2281,7 @@ kbd {
 }
 
 .btn-danger-ghost {
-  color: var(--text-4);
+  color: var(--text-3);
 }
 
 /* ============================== GALLERY ============================== */
@@ -2330,7 +2321,7 @@ kbd {
   justify-content: center;
   overflow: hidden;
   background: var(--bg-3);
-  color: var(--text-4);
+  color: var(--text-3);
   font-size: 24px;
 }
 
@@ -2719,7 +2710,7 @@ kbd {
 }
 
 .np-opt {
-  color: var(--text-4);
+  color: var(--text-3);
   font-weight: 400;
 }
 
@@ -2815,7 +2806,7 @@ kbd {
 .nvp-updated {
   font-family: var(--mono);
   font-size: 8px;
-  color: var(--text-4);
+  color: var(--text-3);
 }
 
 .np-loader-grid {
@@ -2918,7 +2909,7 @@ kbd {
 .np-lv-ok { color: var(--green); }
 .np-lv-warn { color: var(--amber); }
 .np-lv-error { color: var(--red); }
-.np-lv-none { color: var(--text-4); }
+.np-lv-none { color: var(--text-3); }
 .np-lv-manual { color: var(--blue); }
 
 .np-lv-tag {
@@ -2942,7 +2933,7 @@ kbd {
 
 .np-adv-toggle:hover {
   color: var(--text);
-  border-color: var(--text-4);
+  border-color: var(--text-3);
 }
 
 .np-adv {
@@ -3100,7 +3091,7 @@ img.np-pack-icon {
 }
 
 .np-pack-arrow {
-  color: var(--text-4);
+  color: var(--text-3);
   font-size: 11px;
 }
 
@@ -3139,7 +3130,7 @@ img.np-pack-icon {
   justify-content: center;
   border: 1px dashed var(--line-2);
   border-radius: 50%;
-  color: var(--text-4);
+  color: var(--text-3);
   font-family: var(--mono);
 }
 
@@ -3441,7 +3432,7 @@ img.np-pack-icon {
   text-align: center;
   font-family: var(--mono);
   font-size: 8.5px;
-  color: var(--text-4);
+  color: var(--text-3);
 }
 
 /* ============================== VERSION SELECTOR ============================== */
@@ -3719,7 +3710,7 @@ img.np-pack-icon {
 }
 
 .progress-engine-tag {
-  color: var(--text-4);
+  color: var(--text-3);
 }
 
 .btn-dismiss-progress {
@@ -3733,7 +3724,7 @@ img.np-pack-icon {
 }
 
 .btn-dismiss-progress:hover {
-  border-color: var(--text-4);
+  border-color: var(--text-3);
   color: var(--text);
 }
 
@@ -3905,7 +3896,7 @@ img.np-pack-icon {
   flex: 0 0 20px;
   font-family: var(--mono);
   font-size: 8px;
-  color: var(--text-4);
+  color: var(--text-3);
   text-align: center;
 }
 
@@ -4048,7 +4039,7 @@ img.np-pack-icon {
 }
 
 .pds-btn:hover {
-  border-color: var(--text-4);
+  border-color: var(--text-3);
   color: var(--text);
 }
 
@@ -4257,7 +4248,7 @@ img.np-pack-icon {
   justify-content: center;
   overflow: hidden;
   background: var(--bg-3);
-  color: var(--text-4);
+  color: var(--text-3);
   font-size: 18px;
 }
 
@@ -4409,7 +4400,7 @@ img.np-pack-icon {
 .pds-soon-note {
   font-family: var(--mono);
   font-size: 8.5px;
-  color: var(--text-4);
+  color: var(--text-3);
 }
 
 /* PDS Modrinth arama */
@@ -4524,7 +4515,7 @@ img.np-pack-icon {
   margin-top: 3px;
   font-family: var(--mono);
   font-size: 8px;
-  color: var(--text-4);
+  color: var(--text-3);
 }
 
 .pds-chips {
@@ -4958,7 +4949,7 @@ img.np-pack-icon {
 .pds-store-hint {
   font-family: var(--mono);
   font-size: 8px;
-  color: var(--text-4);
+  color: var(--text-3);
 }
 
 /* PDS lightbox */
@@ -5489,7 +5480,7 @@ img.np-pack-icon {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--text-4);
+  background: var(--text-3);
 }
 
 .social-connection-pill[data-state="online"] {
@@ -5557,7 +5548,7 @@ img.np-pack-icon {
 
 .social-code::after {
   content: "kopyala";
-  color: var(--text-4);
+  color: var(--text-3);
   font-family: var(--sans);
   font-size: 8px;
   font-weight: 500;
@@ -5660,7 +5651,7 @@ img.np-pack-icon {
   height: 9px;
   border: 2px solid var(--bg-2);
   border-radius: 50%;
-  background: var(--text-4);
+  background: var(--text-3);
 }
 
 .social-friend[data-online="1"] .social-avatar::after {
